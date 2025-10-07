@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<classpath>
+	<classpathentry kind="con" path="org.eclipse.jdt.launching.JRE_CONTAINER"/>
+	<classpathentry kind="src" path="src"/>
+	<classpathentry kind="lib" path="lib/javacv/javacpp-0.1.jar"/>
+	<classpathentry kind="lib" path="lib/javacv/javacv-0.1-windows-x86_64.jar"/>
+	<classpathentry kind="lib" path="lib/javacv/javacv-0.1-windows-x86.jar"/>
+	<classpathentry kind="lib" path="lib/javacv/javacv-0.1.jar"/>
+	<classpathentry kind="lib" path="lib/javacv/OpenCV.jar"/>
+	<classpathentry kind="output" path="out/production/V-Rep v5"/>
+</classpath>
