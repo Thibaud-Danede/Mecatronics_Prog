@@ -798,6 +798,9 @@ public class Controller {
 //    private FSM track  = new Track( 75, 3);
 //    private FSM clean  = new Clean( 50, 3);
 //    private FSM wander = new Wander(3, 25);
+// --- Détection de blocage (stuck) ---
+    private Double stuckRefDist = null;  // distance de référence devant
+    private long   stuckSinceMs = 0;     // depuis quand on voit ~la même distance
 
     /**
      * Method     : Controller::update()
@@ -871,34 +874,75 @@ public class Controller {
         if (dir == 's') { // AUTO uniquement quand Stop est actif
 
             // --- Réglages ---
-            final double ENTER_TH = 0.30;  // seuil pour considérer l'axe avant "bouché"
-            final double PASS_MARGIN = 0.25;  // couloir acceptable sur au moins un côté
-            final float CRUISE = 2.0f;
-            final float CRUISE_SLOW = 1.2f;
+            final double ENTER_TH     = 0.30;  // axe avant "bouché" si < 0.30 m
+            final double PASS_MARGIN  = 0.25;  // couloir acceptable sur au moins un côté
+            final float  CRUISE       = 2.0f;  // avance normale
+            final float  CRUISE_SLOW  = 1.2f;  // avance prudente
+            final double STUCK_EPS    = 0.03;  // tolérance sur la "même distance" (±3 cm)
+            final long   STUCK_TIMEMS = 3000;  // 3 secondes pour déclarer un blocage
+            final int    TURN_90_MS   = 800;   // durée approx pour ~90° (à ajuster selon ta scène)
 
             // Mapping capteurs (adapte FRONT_SENSOR si besoin)
-            final int FRONT_SENSOR = 2;        // <<< si chez toi c'est 3, mets 3
+            final int FRONT_SENSOR = 2; // si chez toi c'est 3, mets 3
 
-            // 1) Distances utiles (axe très étroit = 1 capteur)
+            // 1) Distances utiles
             double frontAxis = getSonarRange(FRONT_SENSOR);
-            double minLeft = Math.min(Math.min(getSonarRange(0), getSonarRange(1)), getSonarRange(2));
-            double minRight = Math.min(Math.min(getSonarRange(3), getSonarRange(4)), getSonarRange(5));
+            double minLeft   = Math.min(Math.min(getSonarRange(0), getSonarRange(1)), getSonarRange(2));
+            double minRight  = Math.min(Math.min(getSonarRange(3), getSonarRange(4)), getSonarRange(5));
 
-            // 2) Décision
+            long now = System.currentTimeMillis();
+
+            // 2) Mise à jour du détecteur de "même obstacle devant"
+            if (frontAxis < ENTER_TH) {
+                // On regarde si la distance devant reste ~la même
+                if (stuckRefDist == null || Math.abs(frontAxis - stuckRefDist) > STUCK_EPS) {
+                    // nouvelle référence
+                    stuckRefDist = frontAxis;
+                    stuckSinceMs = now;
+                }
+            } else {
+                // avant libre -> reset détecteur
+                stuckRefDist = null;
+                stuckSinceMs = 0;
+            }
+
+            boolean stuck = (stuckRefDist != null) && (now - stuckSinceMs >= STUCK_TIMEMS);
+
+            if (stuck) {
+                // --- ÉCHAPPEMENT DE BLOCAGE ---
+                // (optionnel) reculer un peu pour se dégager
+                move(-1.0f, 300);
+
+                // choisir le côté le plus dégagé pour tourner ~90°
+                if (minLeft < minRight) {
+                    // obstacle plus proche à gauche -> tourner à droite
+                    turnSpot(+vel/4, TURN_90_MS);
+                } else {
+                    // obstacle plus proche à droite -> tourner à gauche
+                    turnSpot(-vel/4, TURN_90_MS);
+                }
+
+                // reset du détecteur pour repartir propre
+                stuckRefDist = null;
+                stuckSinceMs = 0;
+                return;
+            }
+
+            // 3) Logique normale (couloir vs évitement)
             if (frontAxis >= ENTER_TH) {
-                // Axe plein-avant libre -> on passe, même si ça frotte un peu sur les côtés
+                // Axe plein-avant libre -> on passe, même si les côtés voient des choses
                 move(CRUISE);
             } else {
-                // Plein-avant proche (< ENTER_TH) → on regarde s'il existe un "couloir" latéral
+                // Avant proche : s'il existe un couloir d'au moins un côté, on passe doucement
                 if (minLeft > PASS_MARGIN || minRight > PASS_MARGIN) {
-                    // il y a de la marge d'un côté -> on avance prudemment tout droit
                     move(CRUISE_SLOW);
                 } else {
-                    // pas de couloir -> vraie obstruction -> éviter
+                    // Vraie obstruction -> éviter
                     avoid();
                 }
             }
         }
+
     }
     public void avoid()
     {

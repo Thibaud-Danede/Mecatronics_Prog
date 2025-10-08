@@ -145,7 +145,7 @@
     <session id="399254837">
       <usages-collector id="statistics.lifecycle.project">
         <counts>
-          <entry key="project.closed" value="1" />
+          <entry key="project.closed" value="2" />
           <entry key="project.open.time.12" value="1" />
           <entry key="project.open.time.2" value="1" />
           <entry key="project.opened" value="2" />
@@ -168,8 +168,8 @@
       <file pinned="false" current-in-tab="true">
         <entry file="file://$PROJECT_DIR$/src/main/Controller.java">
           <provider selected="true" editor-type-id="text-editor">
-            <state relative-caret-position="1178">
-              <caret line="867" column="40" lean-forward="true" selection-start-line="867" selection-start-column="40" selection-end-line="867" selection-end-column="40" />
+            <state relative-caret-position="121">
+              <caret line="902" column="20" lean-forward="true" selection-start-line="902" selection-start-column="20" selection-end-line="902" selection-end-column="20" />
               <folding>
                 <element signature="imports" expanded="true" />
                 <element signature="e#10159#10160#0" expanded="true" />
@@ -357,7 +357,6 @@
   </component>
   <component name="ToolWindowManager">
     <frame x="-7" y="-7" width="1550" height="838" extended-state="6" />
-    <editor active="true" />
     <layout>
       <window_info content_ui="combo" id="Project" order="0" visible="true" weight="0.13691275" />
       <window_info id="Structure" order="1" side_tool="true" weight="0.25" />
@@ -368,7 +367,7 @@
       <window_info id="Favorites" order="6" side_tool="true" />
       <window_info anchor="bottom" id="Message" order="0" />
       <window_info anchor="bottom" id="Find" order="1" />
-      <window_info active="true" anchor="bottom" id="Run" order="2" visible="true" weight="0.1858156" />
+      <window_info anchor="bottom" id="Run" order="2" weight="0.1858156" />
       <window_info anchor="bottom" id="Debug" order="3" weight="0.4" />
       <window_info anchor="bottom" id="Cvs" order="4" weight="0.25" />
       <window_info anchor="bottom" id="Inspection" order="5" weight="0.4" />
@@ -417,8 +416,8 @@
     </entry>
     <entry file="file://$PROJECT_DIR$/src/main/Controller.java">
       <provider selected="true" editor-type-id="text-editor">
-        <state relative-caret-position="1178">
-          <caret line="867" column="40" lean-forward="true" selection-start-line="867" selection-start-column="40" selection-end-line="867" selection-end-column="40" />
+        <state relative-caret-position="121">
+          <caret line="902" column="20" lean-forward="true" selection-start-line="902" selection-start-column="20" selection-end-line="902" selection-end-column="20" />
           <folding>
             <element signature="imports" expanded="true" />
             <element signature="e#10159#10160#0" expanded="true" />
