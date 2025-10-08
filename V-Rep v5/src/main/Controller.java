@@ -871,8 +871,8 @@ public class Controller {
         if (dir == 's') { // AUTO uniquement quand Stop est actif
 
             // --- Réglages ---
-            final double ENTER_TH = 0.20;  // seuil pour considérer l'axe avant "bouché"
-            final double PASS_MARGIN = 0.15;  // couloir acceptable sur au moins un côté
+            final double ENTER_TH = 0.30;  // seuil pour considérer l'axe avant "bouché"
+            final double PASS_MARGIN = 0.25;  // couloir acceptable sur au moins un côté
             final float CRUISE = 2.0f;
             final float CRUISE_SLOW = 1.2f;
 
@@ -907,12 +907,12 @@ public class Controller {
 
         if(leftMinSonarRadius < rightMinSonarRadius)
         {
-            turnSpot(vel/4, 1000);
+            turnSpot(vel/4, 500);
         }
         else
         if(leftMinSonarRadius > rightMinSonarRadius)
         {
-            turnSpot(-vel/4, 1000);
+            turnSpot(-vel/4, 500);
         }
     }
 
