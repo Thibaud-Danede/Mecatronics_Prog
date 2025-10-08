@@ -381,7 +381,7 @@ public class Controller {
         double distance = Math.sqrt(Math.pow(detectedPointXYZ[0], 2) + Math.pow(detectedPointXYZ[1], 2) + Math.pow(detectedPointXYZ[2], 2));
         distance = Math.round(distance * 100d) / 100d;
         distance = Utils.getDecimal(distance, "0.0");
-        distance = (distance >= 1.0) ? 1.0: distance;
+        distance = (distance >= 1.0) ? 1.0 : distance;
         distance = (distance == 0.0) ? 1.0 : distance;
 
         if (detectionState.getValue())
@@ -799,21 +799,6 @@ public class Controller {
 //    private FSM clean  = new Clean( 50, 3);
 //    private FSM wander = new Wander(3, 25);
 
-    // --- Anti-oscillation & vitesses d'évitement ---
-    private static final double AVOID_DIST      = 0.50;  // seuil évitement (m)
-    private static final double SIDE_DELTA      = 0.05;  // diff mini gauche/droite (m) pour décider
-    private static final int    BACKUP_MS       = 300;   // reculer un peu avant de tourner (ms)
-    private static final float  BACKUP_VEL      = -1.2f; // vitesse de recul
-
-    private static final float  AVOID_TURN_VEL  = 1.0f;  // <<< rotation plus LENTE (était 2.0f)
-    private static final int    AVOID_TURN_MS   = 400;   // durée de rotation (réduite)
-    private static final int    COOL_DOWN_MS    = 600;   // verrouillage côté choisi
-
-    // Mémoire anti-oscillation
-    private long avoidLockUntil = 0;
-    private int  lastAvoidDir   = 0;   // -1 = tourner gauche, +1 = tourner droite, 0 = rien
-
-
     /**
      * Method     : Controller::update()
      * Purpose    : To update custom code.
@@ -836,60 +821,12 @@ public class Controller {
 
         // Template matching:
         templateMatchingCV(getImage());
-        /** Partie ajoutée**/
-        if (dir != 's') {
-            return; // on sort d'update(), les boutons gardent le contrôle
-        }
-        // --- Reactive behavior: Avoid -> Track -> Wander ---
-        double minRange = Double.POSITIVE_INFINITY;
-        int minIdx = -1;
-        for (int i = 0; i < getSonarNo(); i++) {
-            double r = getSonarRange(i);
-            if (r < minRange) { minRange = r; minIdx = i; }
-        }
 
-        boolean avoiding = false;
-
-// 1) Obstacle avoidance (si obstacle proche < 0.35 m)
-        if (minRange < 0.35) {
-            avoiding = true;
-            // capteurs 0..2 = côté gauche, 3..5 = côté droit (adapter si nécessaire)
-            if (minIdx <= 2) {
-                // Obstacle à gauche -> tourne à droite
-                setVel(+2.0f, -2.0f);
-            } else {
-                // Obstacle à droite -> tourne à gauche
-                setVel(-2.0f, +2.0f);
-            }
-        }
-
-        if (!avoiding) {
-            // 2) Suivi de cible via template matching
-            int imgW = getImageWidth();
-            double score = getTargetMaxScore(); // [0,1]
-            int tx = getTargetX();              // pixel x de la meilleure correspondance
-
-            if (score > 0.5 && tx >= 0) {
-                // Contrôle "proportionnel" sur l'erreur horizontale
-                double err = ((double) tx - (imgW / 2.0)) / (imgW / 2.0); // -1..+1
-                float base = 3.0f;  // vitesse d'avance
-                float gain = 2.0f;  // intensité de rotation
-                float lv = base - (float) (gain * err);
-                float rv = base + (float) (gain * err);
-                setVel(lv, rv);
-            } else {
-                // 3) Wander: errance douce si pas de cible fiable
-                long t = System.currentTimeMillis() / 500; // alterne toutes les 0.5s
-                float turn = (t % 2 == 0) ? +1.0f : -1.0f;
-                setVel(1.5f - turn * 0.5f, 1.5f + turn * 0.5f);
-            }
-        }
-        /** Fin Partie ajoutée**/
         // Print sensors test:
-//        System.out.println("\nWheel(R): " + getRightWheelEnc() + ", Wheel(L): " + getLeftWheelEnc()); // Wheel revolutions.
-//        System.out.println("GPS(X): " + getGPSX() + ", GPS(Y): " + getGPSY() + ", GPS(Z): " + getGPSZ()); // GPS coordinates.
-//        System.out.println("C: " + getBatteryCapacity() + "v, P: " + getBatteryPercentage() + "%, S: " + getBatteryState() + ", T: " + getBatteryTime() + "sec"); // Battery stats.
-//        for(int i=0 ; i<getSonarNo() ; i++) System.out.println(i + ": " + Utils.getDecimal(getSonarRange(i), "0.0")); // Print ultrasonic ranges.
+        System.out.println("\nWheel(R): " + getRightWheelEnc() + ", Wheel(L): " + getLeftWheelEnc()); // Wheel revolutions.
+        System.out.println("GPS(X): " + getGPSX() + ", GPS(Y): " + getGPSY() + ", GPS(Z): " + getGPSZ()); // GPS coordinates.
+        System.out.println("C: " + getBatteryCapacity() + "v, P: " + getBatteryPercentage() + "%, S: " + getBatteryState() + ", T: " + getBatteryTime() + "sec"); // Battery stats.
+        for(int i=0 ; i<getSonarNo() ; i++) System.out.println(i + ": " + Utils.getDecimal(getSonarRange(i), "0.0")); // Print ultrasonic ranges.
     }
 
     /**
@@ -931,69 +868,34 @@ public class Controller {
                         getSonarRange(4),
                         getSonarRange(5)
                 };
+        // --- Déclenchement conditionnel de l'évitement ---
+        double AVOID_DIST = 0.5;  // mètres
+        double minSonar = Arrays.stream(getSonarRanges()).min().orElse(Double.POSITIVE_INFINITY);
 
-        avoid();
+        // Si un obstacle est détecté à moins de 0.5 m → on déclenche avoid()
+        if (minSonar < AVOID_DIST) {
+            avoid();
+        } else {
+            // Sinon, aucun obstacle dangereux -> pas d'action d'évitement
+            // (le robot peut continuer son comportement normal ici)
+        }
+
     }
 
     public void avoid()
     {
-        // --- Avoid: plus lent + anti-oscillation + marche arrière courte ---
-        double minRange = Double.POSITIVE_INFINITY;
-        int minIdx = -1;
-        for (int i = 0; i < getSonarNo(); i++) {
-            double r = getSonarRange(i);
-            if (r < minRange) { minRange = r; minIdx = i; }
+        double leftMinSonarRadius  = Arrays.stream(new double[]{getSonarRange(0), getSonarRange(1), getSonarRange(2)}).min().getAsDouble();
+        double rightMinSonarRadius = Arrays.stream(new double[]{getSonarRange(3), getSonarRange(4), getSonarRange(5)}).min().getAsDouble();
+
+        if(leftMinSonarRadius < rightMinSonarRadius)
+        {
+            turnSpot(vel/2, 1000);
         }
-
-        boolean avoiding = false;
-        int turnDir = 0; // -1 gauche, +1 droite
-
-        if (minRange < AVOID_DIST) {
-            avoiding = true;
-
-            // Choix du côté : 0..2 = gauche, 3..5 = droite (adapte si ton mapping diffère)
-            int candidateDir = (minIdx <= 2) ? +1 : -1; // obstacle à gauche => tourner à droite (+1), sinon tourner à gauche (-1)
-
-            // Anti-oscillation : si cooldown actif, on garde la même direction
-            long now = System.currentTimeMillis();
-            if (now < avoidLockUntil && lastAvoidDir != 0) {
-                turnDir = lastAvoidDir;
-            } else {
-                // Ne changer que si la différence est significative
-                double leftMin  = Math.min(Math.min(getSonarRange(0), getSonarRange(1)), getSonarRange(2));
-                double rightMin = Math.min(Math.min(getSonarRange(3), getSonarRange(4)), getSonarRange(5));
-                double nearest  = Math.min(leftMin, rightMin);
-
-                if (nearest < AVOID_DIST) {
-                    // on ne décide que s'il y a un écart clair entre les côtés
-                    if (leftMin + SIDE_DELTA < rightMin) candidateDir = +1;   // tourner à droite
-                    else if (rightMin + SIDE_DELTA < leftMin) candidateDir = -1; // tourner à gauche
-                    // sinon: on garde candidateDir tel quel (issu du capteur minimum)
-                }
-
-                turnDir = candidateDir;
-                lastAvoidDir = turnDir;
-                avoidLockUntil = now + COOL_DOWN_MS; // verrouille cette direction pour un petit moment
-            }
-
-            // 1) reculer un peu pour se dégager
-            move(BACKUP_VEL, BACKUP_MS);
-
-            // 2) rotation LENTE et courte (au lieu de setVel(±2.0f,…))
-            if (turnDir > 0) {
-                setVel(+AVOID_TURN_VEL, -AVOID_TURN_VEL);
-            } else {
-                setVel(-AVOID_TURN_VEL, +AVOID_TURN_VEL);
-            }
-
-            // Maintenir la rotation pendant AVOID_TURN_MS sans bloquer trop longtemps
-            motionTimer.setMs(AVOID_TURN_MS);
-            motionTimer.restart();
-            while (motionTimer.getState()) {
-                // on garde la même vitesse (rotation lente)
-            }
+        else
+        if(leftMinSonarRadius > rightMinSonarRadius)
+        {
+            turnSpot(-vel/2, 1000);
         }
-
     }
 
     /**
@@ -1005,20 +907,8 @@ public class Controller {
      * Returns    : True (+1) if TLU is activated, False (-1) otherwise.
      * Notes      : None.
      **/
-
-    /** Partie ajoutée**/
     public boolean tlu(double w_vec[], double s_vec[], double f)
     {
-        // Active si le produit scalaire w·s dépasse le seuil f
-        //Accumule la somme de weight * speed
-        double sum = 0.0;
-        //Limite la boucle à la plus petite taille des deux vecteurs poids et vitesse
-        int n = Math.min(w_vec.length, s_vec.length);
-        //Incrément de la somme des multiplications des vecteurs w et s
-        for (int i = 0; i < n; i++) {
-            sum += w_vec[i] * s_vec[i];
-        }
-        return (sum >= f);
+        return (false);
     }
-    /** Fin Partie ajoutée**/
 }
