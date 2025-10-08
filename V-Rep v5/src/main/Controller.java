@@ -823,10 +823,10 @@ public class Controller {
         templateMatchingCV(getImage());
 
         // Print sensors test:
-        System.out.println("\nWheel(R): " + getRightWheelEnc() + ", Wheel(L): " + getLeftWheelEnc()); // Wheel revolutions.
-        System.out.println("GPS(X): " + getGPSX() + ", GPS(Y): " + getGPSY() + ", GPS(Z): " + getGPSZ()); // GPS coordinates.
-        System.out.println("C: " + getBatteryCapacity() + "v, P: " + getBatteryPercentage() + "%, S: " + getBatteryState() + ", T: " + getBatteryTime() + "sec"); // Battery stats.
-        for(int i=0 ; i<getSonarNo() ; i++) System.out.println(i + ": " + Utils.getDecimal(getSonarRange(i), "0.0")); // Print ultrasonic ranges.
+//        System.out.println("\nWheel(R): " + getRightWheelEnc() + ", Wheel(L): " + getLeftWheelEnc()); // Wheel revolutions.
+//        System.out.println("GPS(X): " + getGPSX() + ", GPS(Y): " + getGPSY() + ", GPS(Z): " + getGPSZ()); // GPS coordinates.
+//        System.out.println("C: " + getBatteryCapacity() + "v, P: " + getBatteryPercentage() + "%, S: " + getBatteryState() + ", T: " + getBatteryTime() + "sec"); // Battery stats.
+//        for(int i=0 ; i<getSonarNo() ; i++) System.out.println(i + ": " + Utils.getDecimal(getSonarRange(i), "0.0")); // Print ultrasonic ranges.
     }
 
     /**
@@ -848,8 +848,7 @@ public class Controller {
      * Returns    : Nothing.
      * Notes      : None.
      **/
-    public void run()
-    {
+    public void run() {
         Integer priority[] = new Integer[2];
         //        int priority[] = new int[4];
 
@@ -868,20 +867,39 @@ public class Controller {
                         getSonarRange(4),
                         getSonarRange(5)
                 };
-        // --- Déclenchement conditionnel de l'évitement ---
-        double AVOID_DIST = 0.5;  // mètres
-        double minSonar = Arrays.stream(getSonarRanges()).min().orElse(Double.POSITIVE_INFINITY);
 
-        // Si un obstacle est détecté à moins de 0.5 m → on déclenche avoid()
-        if (minSonar < AVOID_DIST) {
-            avoid();
-        } else {
-            // Sinon, aucun obstacle dangereux -> pas d'action d'évitement
-            // (le robot peut continuer son comportement normal ici)
+        if (dir == 's') { // AUTO uniquement quand Stop est actif
+
+            // --- Réglages ---
+            final double ENTER_TH = 0.20;  // seuil pour considérer l'axe avant "bouché"
+            final double PASS_MARGIN = 0.15;  // couloir acceptable sur au moins un côté
+            final float CRUISE = 2.0f;
+            final float CRUISE_SLOW = 1.2f;
+
+            // Mapping capteurs (adapte FRONT_SENSOR si besoin)
+            final int FRONT_SENSOR = 2;        // <<< si chez toi c'est 3, mets 3
+
+            // 1) Distances utiles (axe très étroit = 1 capteur)
+            double frontAxis = getSonarRange(FRONT_SENSOR);
+            double minLeft = Math.min(Math.min(getSonarRange(0), getSonarRange(1)), getSonarRange(2));
+            double minRight = Math.min(Math.min(getSonarRange(3), getSonarRange(4)), getSonarRange(5));
+
+            // 2) Décision
+            if (frontAxis >= ENTER_TH) {
+                // Axe plein-avant libre -> on passe, même si ça frotte un peu sur les côtés
+                move(CRUISE);
+            } else {
+                // Plein-avant proche (< ENTER_TH) → on regarde s'il existe un "couloir" latéral
+                if (minLeft > PASS_MARGIN || minRight > PASS_MARGIN) {
+                    // il y a de la marge d'un côté -> on avance prudemment tout droit
+                    move(CRUISE_SLOW);
+                } else {
+                    // pas de couloir -> vraie obstruction -> éviter
+                    avoid();
+                }
+            }
         }
-
     }
-
     public void avoid()
     {
         double leftMinSonarRadius  = Arrays.stream(new double[]{getSonarRange(0), getSonarRange(1), getSonarRange(2)}).min().getAsDouble();
@@ -889,12 +907,12 @@ public class Controller {
 
         if(leftMinSonarRadius < rightMinSonarRadius)
         {
-            turnSpot(vel/2, 1000);
+            turnSpot(vel/4, 1000);
         }
         else
         if(leftMinSonarRadius > rightMinSonarRadius)
         {
-            turnSpot(-vel/2, 1000);
+            turnSpot(-vel/4, 1000);
         }
     }
 
