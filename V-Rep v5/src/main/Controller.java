@@ -807,6 +807,14 @@ public class Controller {
     private long   lastProgTs = 0;
     private boolean progInit = false;
 
+    // --- Modes de fonctionnement ---
+    public static final int MODE_AUTO  = 0;  // état 0 : auto "de base" (avance + évitement)
+    public static final int MODE_MANU  = 1;  // état 1 : manuel (aucun évitement déclenché par le code)
+    public static final int MODE_ROUTE = 3;  // état 3 : suivi de route (placeholder)
+
+    private int mode = MODE_MANU;            // <<< CHANGE CETTE VALEUR (0, 1, 3)
+
+
 
     /**
      * Method     : Controller::update()
@@ -858,6 +866,20 @@ public class Controller {
      * Notes      : None.
      **/
 
+    // choix du mode
+    private void setMode(int newMode) {
+        if (this.mode != newMode) {
+            // Remet à zéro quelques détecteurs quand on quitte le manuel
+            if (newMode == MODE_AUTO || newMode == MODE_ROUTE) {
+                stuckRefDist = null;
+                stuckSinceMs = 0;
+                progInit     = false; // force la ré-init de la progression
+            }
+            this.mode = newMode;
+            System.out.println("Mode -> " + newMode);
+        }
+    }
+
     private double dist2D(double x1, double y1, double x2, double y2) {
         double dx = x2 - x1, dy = y2 - y1;
         return Math.sqrt(dx*dx + dy*dy);
@@ -866,24 +888,38 @@ public class Controller {
 
     public void run() {
         Integer priority[] = new Integer[2];
-        //        int priority[] = new int[4];
 
-        double cam = getTargetMaxScore();                                                      // Target horizontal detection (pixels).
-        double bat = getBatteryCapacity();                                                     // Battery capacity (volts).
-        double snr = Arrays.stream(getSonarRanges()).min().getAsDouble();                      // Min sonar range radius (meters).
-        double gps = Utils.getEuclidean(CHARGER_XCOORD, getGPSY(), getGPSX(), CHARGER_YCOORD); // GPS distance from charger (meters?).
-        double sensors[] = new double[]{bat, snr, cam, gps};                                   // Sensor vector.
+        double cam = getTargetMaxScore();
+        double bat = getBatteryCapacity();
+        double snr = Arrays.stream(getSonarRanges()).min().getAsDouble();
+        double gps = Utils.getEuclidean(CHARGER_XCOORD, getGPSY(), getGPSX(), CHARGER_YCOORD);
+        double sensors[] = new double[]{bat, snr, cam, gps};
 
-        double sonarData[] = new double[]
-                {
-                        getSonarRange(0),
-                        getSonarRange(1),
-                        getSonarRange(2),
-                        getSonarRange(3),
-                        getSonarRange(4),
-                        getSonarRange(5)
-                };
+        double sonarData[] = new double[]{
+                getSonarRange(0), getSonarRange(1), getSonarRange(2),
+                getSonarRange(3), getSonarRange(4), getSonarRange(5)
+        };
 
+        switch (mode) {
+            case MODE_MANU:
+                // ÉTAT 1 : MANUEL
+                // Ne rien faire ici : on laisse 100% la main aux commandes utilisateur (flèches/boutons).
+                // Surtout ne pas appeler avoid(), move(), etc. depuis l’auto.
+                return;
+
+            case MODE_ROUTE:
+                // ÉTAT 3 : SUIVI DE ROUTE (placeholder)
+                // TODO: ici on mettra la logique de suivi (ligne/waypoints) + évitement si tu veux.
+                // Pour l’instant, on ne fait rien pour ne pas interférer.
+                return;
+
+            case MODE_AUTO:
+            default:
+                // ÉTAT 0 : AUTO "de base" (ton code actuel)
+                break; // on tombe sur le bloc auto juste en-dessous
+        }
+
+        // ========= TON CODE AUTO ACTUEL (ÉTAT 0) =========
         if (dir == 's') { // AUTO uniquement quand Stop est actif
 
             // --- Réglages ---
@@ -895,96 +931,68 @@ public class Controller {
             // Détection de STALL (pas de progression)
             final double PROG_EPS     = 0.02;  // 2 cm minimum de déplacement
             final long   PROG_TIMEOUT = 2000;  // 2 s sans progresser => bloqué
-            final int    ESC_BACK_MS  = 1000;   // recul ms
+            final int    ESC_BACK_MS  = 1000;  // recul ms
             final float  ESC_BACK_VEL = -1.2f; // vitesse de recul
             final int    ESC_TURN_MS  = 750;   // ~90° (ajuste si besoin)
-            final float  ESC_TURN_VEL =  vel/3;// un peu plus vif que vel/4 pour se décoincer
+            final float  ESC_TURN_VEL =  vel/3;// un peu plus vif que vel/4
 
             // Mapping capteurs
-            final int FRONT_SENSOR = 2; // si chez toi c'est 3, mets 3
-
+            final int FRONT_SENSOR = 2; // ajuste si besoin
 
             // 1) Distances utiles
             double frontAxis = getSonarRange(FRONT_SENSOR);
             double minLeft   = Math.min(Math.min(getSonarRange(0), getSonarRange(1)), getSonarRange(2));
             double minRight  = Math.min(Math.min(getSonarRange(3), getSonarRange(4)), getSonarRange(5));
 
-            // 2) Détection "pas de progression" (via GPS ; tu peux utiliser l’odométrie si tu préfères)
+            // 2) Détection "pas de progression"
             double x = getGPSX(), y = getGPSY();
             long now = System.currentTimeMillis();
 
-            if (!progInit) { // init au premier passage
-                lastProgX = x; lastProgY = y; lastProgTs = now; progInit = true;
-            }
+            if (!progInit) { lastProgX = x; lastProgY = y; lastProgTs = now; progInit = true; }
 
             boolean noProgress = false;
             double d = dist2D(lastProgX, lastProgY, x, y);
             if (d >= PROG_EPS) {
-                // on a avancé : reset du timer
                 lastProgX = x; lastProgY = y; lastProgTs = now;
-            } else {
-                // pas (ou peu) de déplacement : checker le timeout
-                if (now - lastProgTs >= PROG_TIMEOUT) {
-                    noProgress = true;
-                    // on reset pour éviter déclenchements en chaîne
-                    lastProgX = x; lastProgY = y; lastProgTs = now;
-                }
+            } else if (now - lastProgTs >= PROG_TIMEOUT) {
+                noProgress = true;
+                lastProgX = x; lastProgY = y; lastProgTs = now; // évite retrigger en chaine
             }
 
-            // 3) Si pas de progression -> manœuvre d’échappement
+            // 3) Échappement si bloqué (recul, pause, 90°, pause, reprise)
             if (noProgress) {
-                // --- paramètres de la séquence d’échappement ---
-                final int   PAUSE_MS        = 150;     // pause après le recul / après le pivot
-                final float CRUISE_RESUME   = 1.6f;    // poussée d’élan après le pivot
-                final int   RESUME_MS       = 600;     // durée de la poussée
-                // (ESC_BACK_MS, ESC_BACK_VEL, ESC_TURN_MS, ESC_TURN_VEL déjà définis au-dessus)
+                final int   PAUSE_MS      = 150;
+                final float CRUISE_RESUME = 1.6f;
+                final int   RESUME_MS     = 600;
 
-                // 1) reculer pour se dégager
                 move(ESC_BACK_VEL, ESC_BACK_MS);
-
-                // 2) pause courte (laisser le robot se stabiliser)
                 move(0f, PAUSE_MS);
 
-                // 3) tourner ~90° vers le côté le plus dégagé
-                //    => on choisit le côté dont la distance minimale est la PLUS GRANDE
-                boolean turnRight = (minRight >= minLeft);
-                if (turnRight) {
-                    // droite plus dégagée -> tourne à droite
-                    turnSpot(+ESC_TURN_VEL, ESC_TURN_MS);
-                } else {
-                    // gauche plus dégagée -> tourne à gauche
-                    turnSpot(-ESC_TURN_VEL, ESC_TURN_MS);
-                }
+                boolean turnRight = (minRight >= minLeft); // tourner vers le côté le plus dégagé
+                if (turnRight) turnSpot(+ESC_TURN_VEL, ESC_TURN_MS);
+                else           turnSpot(-ESC_TURN_VEL, ESC_TURN_MS);
 
-                // 4) pause courte après le pivot
                 move(0f, PAUSE_MS);
-
-                // 5) relance vers l’avant (petit "push" pour sortir de la zone)
                 move(CRUISE_RESUME, RESUME_MS);
 
-                // 6) réinitialiser la référence de progression pour éviter un retrigger immédiat
-                lastProgX = getGPSX();
-                lastProgY = getGPSY();
-                lastProgTs = System.currentTimeMillis();
-
-                return; // fin du cycle
+                // reset progression
+                lastProgX = getGPSX(); lastProgY = getGPSY(); lastProgTs = System.currentTimeMillis();
+                return;
             }
 
-            // 4) Logique normale (cône + couloir)
+            // 4) Logique normale (cône très étroit + couloir)
             if (frontAxis >= ENTER_TH) {
-                // Axe plein-avant libre -> on avance, même si ça frotte sur les côtés
                 move(CRUISE);
             } else {
-                // Avant proche : s'il existe un couloir d'au moins un côté, on passe doucement
                 if (minLeft > PASS_MARGIN || minRight > PASS_MARGIN) {
                     move(CRUISE_SLOW);
                 } else {
-                    // Vraie obstruction -> éviter
                     avoid();
                 }
             }
         }
     }
+
     public void avoid()
     {
         double leftMinSonarRadius  = Arrays.stream(new double[]{getSonarRange(0), getSonarRange(1), getSonarRange(2)}).min().getAsDouble();
