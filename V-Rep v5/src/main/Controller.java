@@ -798,9 +798,15 @@ public class Controller {
 //    private FSM track  = new Track( 75, 3);
 //    private FSM clean  = new Clean( 50, 3);
 //    private FSM wander = new Wander(3, 25);
-// --- Détection de blocage (stuck) ---
+    // --- Détection de blocage (stuck) ---
     private Double stuckRefDist = null;  // distance de référence devant
     private long   stuckSinceMs = 0;     // depuis quand on voit ~la même distance
+
+    // --- Détection de blocage "pas de progression" ---
+    private double lastProgX = 0.0, lastProgY = 0.0;
+    private long   lastProgTs = 0;
+    private boolean progInit = false;
+
 
     /**
      * Method     : Controller::update()
@@ -851,6 +857,13 @@ public class Controller {
      * Returns    : Nothing.
      * Notes      : None.
      **/
+
+    private double dist2D(double x1, double y1, double x2, double y2) {
+        double dx = x2 - x1, dy = y2 - y1;
+        return Math.sqrt(dx*dx + dy*dy);
+    }
+
+
     public void run() {
         Integer priority[] = new Integer[2];
         //        int priority[] = new int[4];
@@ -878,59 +891,62 @@ public class Controller {
             final double PASS_MARGIN  = 0.25;  // couloir acceptable sur au moins un côté
             final float  CRUISE       = 2.0f;  // avance normale
             final float  CRUISE_SLOW  = 1.2f;  // avance prudente
-            final double STUCK_EPS    = 0.03;  // tolérance sur la "même distance" (±3 cm)
-            final long   STUCK_TIMEMS = 3000;  // 3 secondes pour déclarer un blocage
-            final int    TURN_90_MS   = 800;   // durée approx pour ~90° (à ajuster selon ta scène)
 
-            // Mapping capteurs (adapte FRONT_SENSOR si besoin)
+            // Détection de STALL (pas de progression)
+            final double PROG_EPS     = 0.02;  // 2 cm minimum de déplacement
+            final long   PROG_TIMEOUT = 2000;  // 2 s sans progresser => bloqué
+            final int    ESC_BACK_MS  = 1050;   // recul ms
+            final float  ESC_BACK_VEL = -1.2f; // vitesse de recul
+            final int    ESC_TURN_MS  = 750;   // ~90° (ajuste si besoin)
+            final float  ESC_TURN_VEL =  vel/3;// un peu plus vif que vel/4 pour se décoincer
+
+            // Mapping capteurs
             final int FRONT_SENSOR = 2; // si chez toi c'est 3, mets 3
+
 
             // 1) Distances utiles
             double frontAxis = getSonarRange(FRONT_SENSOR);
             double minLeft   = Math.min(Math.min(getSonarRange(0), getSonarRange(1)), getSonarRange(2));
             double minRight  = Math.min(Math.min(getSonarRange(3), getSonarRange(4)), getSonarRange(5));
 
+            // 2) Détection "pas de progression" (via GPS ; tu peux utiliser l’odométrie si tu préfères)
+            double x = getGPSX(), y = getGPSY();
             long now = System.currentTimeMillis();
 
-            // 2) Mise à jour du détecteur de "même obstacle devant"
-            if (frontAxis < ENTER_TH) {
-                // On regarde si la distance devant reste ~la même
-                if (stuckRefDist == null || Math.abs(frontAxis - stuckRefDist) > STUCK_EPS) {
-                    // nouvelle référence
-                    stuckRefDist = frontAxis;
-                    stuckSinceMs = now;
-                }
+            if (!progInit) { // init au premier passage
+                lastProgX = x; lastProgY = y; lastProgTs = now; progInit = true;
+            }
+
+            boolean noProgress = false;
+            double d = dist2D(lastProgX, lastProgY, x, y);
+            if (d >= PROG_EPS) {
+                // on a avancé : reset du timer
+                lastProgX = x; lastProgY = y; lastProgTs = now;
             } else {
-                // avant libre -> reset détecteur
-                stuckRefDist = null;
-                stuckSinceMs = 0;
-            }
-
-            boolean stuck = (stuckRefDist != null) && (now - stuckSinceMs >= STUCK_TIMEMS);
-
-            if (stuck) {
-                // --- ÉCHAPPEMENT DE BLOCAGE ---
-                // (optionnel) reculer un peu pour se dégager
-                move(-1.0f, 300);
-
-                // choisir le côté le plus dégagé pour tourner ~90°
-                if (minLeft < minRight) {
-                    // obstacle plus proche à gauche -> tourner à droite
-                    turnSpot(+vel/4, TURN_90_MS);
-                } else {
-                    // obstacle plus proche à droite -> tourner à gauche
-                    turnSpot(-vel/4, TURN_90_MS);
+                // pas (ou peu) de déplacement : checker le timeout
+                if (now - lastProgTs >= PROG_TIMEOUT) {
+                    noProgress = true;
+                    // on reset pour éviter déclenchements en chaîne
+                    lastProgX = x; lastProgY = y; lastProgTs = now;
                 }
-
-                // reset du détecteur pour repartir propre
-                stuckRefDist = null;
-                stuckSinceMs = 0;
-                return;
             }
 
-            // 3) Logique normale (couloir vs évitement)
+            // 3) Si pas de progression -> manœuvre d’échappement
+            if (noProgress) {
+                // reculer
+                move(ESC_BACK_VEL, ESC_BACK_MS);
+                // tourner vers le côté le plus dégagé
+                if (minLeft < minRight) {
+                    turnSpot(+ESC_TURN_VEL, ESC_TURN_MS); // obstacle plus proche à gauche -> tourne à droite
+                } else {
+                    turnSpot(-ESC_TURN_VEL, ESC_TURN_MS); // obstacle plus proche à droite -> tourne à gauche
+                }
+                return; // fin du cycle
+            }
+
+            // 4) Logique normale (cône + couloir)
             if (frontAxis >= ENTER_TH) {
-                // Axe plein-avant libre -> on passe, même si les côtés voient des choses
+                // Axe plein-avant libre -> on avance, même si ça frotte sur les côtés
                 move(CRUISE);
             } else {
                 // Avant proche : s'il existe un couloir d'au moins un côté, on passe doucement
@@ -942,7 +958,6 @@ public class Controller {
                 }
             }
         }
-
     }
     public void avoid()
     {
