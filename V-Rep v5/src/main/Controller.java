@@ -895,7 +895,7 @@ public class Controller {
             // Détection de STALL (pas de progression)
             final double PROG_EPS     = 0.02;  // 2 cm minimum de déplacement
             final long   PROG_TIMEOUT = 2000;  // 2 s sans progresser => bloqué
-            final int    ESC_BACK_MS  = 1050;   // recul ms
+            final int    ESC_BACK_MS  = 1000;   // recul ms
             final float  ESC_BACK_VEL = -1.2f; // vitesse de recul
             final int    ESC_TURN_MS  = 750;   // ~90° (ajuste si besoin)
             final float  ESC_TURN_VEL =  vel/3;// un peu plus vif que vel/4 pour se décoincer
@@ -933,14 +933,40 @@ public class Controller {
 
             // 3) Si pas de progression -> manœuvre d’échappement
             if (noProgress) {
-                // reculer
+                // --- paramètres de la séquence d’échappement ---
+                final int   PAUSE_MS        = 150;     // pause après le recul / après le pivot
+                final float CRUISE_RESUME   = 1.6f;    // poussée d’élan après le pivot
+                final int   RESUME_MS       = 600;     // durée de la poussée
+                // (ESC_BACK_MS, ESC_BACK_VEL, ESC_TURN_MS, ESC_TURN_VEL déjà définis au-dessus)
+
+                // 1) reculer pour se dégager
                 move(ESC_BACK_VEL, ESC_BACK_MS);
-                // tourner vers le côté le plus dégagé
-                if (minLeft < minRight) {
-                    turnSpot(+ESC_TURN_VEL, ESC_TURN_MS); // obstacle plus proche à gauche -> tourne à droite
+
+                // 2) pause courte (laisser le robot se stabiliser)
+                move(0f, PAUSE_MS);
+
+                // 3) tourner ~90° vers le côté le plus dégagé
+                //    => on choisit le côté dont la distance minimale est la PLUS GRANDE
+                boolean turnRight = (minRight >= minLeft);
+                if (turnRight) {
+                    // droite plus dégagée -> tourne à droite
+                    turnSpot(+ESC_TURN_VEL, ESC_TURN_MS);
                 } else {
-                    turnSpot(-ESC_TURN_VEL, ESC_TURN_MS); // obstacle plus proche à droite -> tourne à gauche
+                    // gauche plus dégagée -> tourne à gauche
+                    turnSpot(-ESC_TURN_VEL, ESC_TURN_MS);
                 }
+
+                // 4) pause courte après le pivot
+                move(0f, PAUSE_MS);
+
+                // 5) relance vers l’avant (petit "push" pour sortir de la zone)
+                move(CRUISE_RESUME, RESUME_MS);
+
+                // 6) réinitialiser la référence de progression pour éviter un retrigger immédiat
+                lastProgX = getGPSX();
+                lastProgY = getGPSY();
+                lastProgTs = System.currentTimeMillis();
+
                 return; // fin du cycle
             }
 
