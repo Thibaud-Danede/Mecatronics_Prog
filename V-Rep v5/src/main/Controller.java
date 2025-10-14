@@ -704,6 +704,7 @@ public class Controller {
 
         update.start();
         main.start();
+        updateModeUI();
     }
 
     /**
@@ -808,13 +809,13 @@ public class Controller {
     private boolean progInit = false;
 
     // --- Modes de fonctionnement ---
-    public static final int MODE_AUTO  = 0;  // état 0 : auto "de base" (avance + évitement)
-    public static final int MODE_MANU  = 1;  // état 1 : manuel (aucun évitement déclenché par le code)
-    public static final int MODE_ROUTE = 3;  // état 3 : suivi de route (placeholder)
+    public static final int MODE_AUTO  = 0;  // état 0 : auto (avance + évitement)
+    public static final int MODE_MANU  = 1;  // état 1 : manuel (aucune commande auto)
+    public static final int MODE_ROUTE = 3;  // réservé pour plus tard
 
-    private int mode = MODE_MANU;            // <<< CHANGE CETTE VALEUR (0, 1, 3)
+    private int mode = MODE_AUTO;            // <<< change cette valeur si tu veux démarrer en MANU/ROUTE
 
-
+    @FXML private Button btnMode;            // injecté depuis GUI.fxml
 
     /**
      * Method     : Controller::update()
@@ -863,8 +864,36 @@ public class Controller {
      * Purpose    : To run a custom Subsumption Architecture.
      * Parameters : None.
      * Returns    : Nothing.
-     * Notes      : None.
+     * Notes      : None
      **/
+
+    // Affiche le nouveau bouton
+    private void updateModeUI() {
+        if (btnMode == null) return; // au cas où non chargé
+        String label = (mode == MODE_AUTO) ? "Mode: AUTO"
+                : (mode == MODE_MANU) ? "Mode: MANU"
+                : "Mode: ROUTE";
+        btnMode.setText(label);
+    }
+
+    @FXML
+    private void toggleMode() {
+        if (mode == MODE_MANU) {
+            // passer en AUTO
+            mode = MODE_AUTO;
+            // petit reset des détecteurs utiles à l'auto
+            stuckRefDist = null;
+            stuckSinceMs = 0;
+            progInit     = false;
+            // astuce: mettre dir = 's' pour autoriser l'auto à prendre la main si tu gardes ce garde-fou
+            dir = 's';
+        } else {
+            // passer en MANU
+            mode = MODE_MANU;
+            // en manuel on ne pousse plus de commandes auto
+        }
+        updateModeUI();
+    }
 
     // choix du mode
     private void setMode(int newMode) {
@@ -918,6 +947,14 @@ public class Controller {
                 // ÉTAT 0 : AUTO "de base" (ton code actuel)
                 break; // on tombe sur le bloc auto juste en-dessous
         }
+
+        // dispatcher par mode
+        if (mode == MODE_MANU) {
+            // ÉTAT 1 : manuel -> ne rien faire ici, on laisse l'utilisateur piloter
+            return;
+        }
+        // (MODE_ROUTE sera géré plus tard)
+
 
         // ========= TON CODE AUTO ACTUEL (ÉTAT 0) =========
         if (dir == 's') { // AUTO uniquement quand Stop est actif
