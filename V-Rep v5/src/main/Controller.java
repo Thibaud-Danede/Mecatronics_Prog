@@ -794,28 +794,70 @@ public class Controller {
     /********************************************************************************************************************
      *                                                   Student Code                                                   *
      ********************************************************************************************************************/
-
 //    private FSM avoid = new Avoid(3, 100);
 //    private FSM track  = new Track( 75, 3);
 //    private FSM clean  = new Clean( 50, 3);
 //    private FSM wander = new Wander(3, 25);
-    // --- Détection de blocage (stuck) ---
-    private Double stuckRefDist = null;  // distance de référence devant
-    private long   stuckSinceMs = 0;     // depuis quand on voit ~la même distance
 
-    // --- Détection de blocage "pas de progression" ---
-    private double lastProgX = 0.0, lastProgY = 0.0;
-    private long   lastProgTs = 0;
-    private boolean progInit = false;
+//
+// --- Stubs pour éviter les erreurs si le FXML appelle ces méthodes
+//     (ne dépendent d’aucune variable externe ; sans effet si le bouton n’existe pas) ---
+//
 
-    // --- Modes de fonctionnement ---
-    public static final int MODE_AUTO  = 0;  // état 0 : auto (avance + évitement)
-    public static final int MODE_MANU  = 1;  // état 1 : manuel (aucune commande auto)
-    public static final int MODE_ROUTE = 3;  // réservé pour plus tard
+    // --- MODES (utiles pour le cycle MANU → ROUTE → AUTO) ---
+    private static final int MODE_AUTO  = 0;
+    private static final int MODE_MANU  = 1;
+    private static final int MODE_ROUTE = 3;
 
-    private int mode = MODE_AUTO;            // <<< change cette valeur si tu veux démarrer en MANU/ROUTE
+    // État courant du mode. Tu peux choisir le démarrage que tu veux.
+    // Pour coller au label initial du FXML ("Mode: AUTO"), mets MODE_AUTO.
+    // Si tu préfères démarrer MANU, mets MODE_MANU.
+    private int mode = MODE_MANU;
 
-    @FXML private Button btnMode;            // injecté depuis GUI.fxml
+    @FXML private Button btnMode; // si déjà déclaré ailleurs, supprime cette ligne
+
+    // Met à jour le libellé du bouton selon le mode courant
+    private void updateModeUI() {
+        if (btnMode == null) return;
+        String label = (mode == MODE_AUTO) ? "Mode: AUTO"
+                : (mode == MODE_MANU) ? "Mode: MANU"
+                : "Mode: ROUTE";
+        btnMode.setText(label);
+    }
+
+    // Handler appelé par le FXML: onAction="#toggleMode"
+    @FXML
+    private void toggleMode() {
+        // Cycle MANU -> ROUTE -> AUTO -> MANU
+        if (mode == MODE_MANU) {
+            System.out.println("Passage en mode route");
+            mode = MODE_ROUTE;
+        } else if (mode == MODE_ROUTE) {
+            System.out.println("Passage en mode auto");
+            mode = MODE_AUTO;
+        } else {
+            System.out.println("Passage en mode manuel");
+            mode = MODE_MANU;
+        }
+        updateModeUI();
+    }
+
+    // Avance tant qu'il n'y a rien devant ; sinon délègue à avoid()
+    private void autoStep() {
+        double leftMin  = Math.min(Math.min(getSonarRange(0), getSonarRange(1)), getSonarRange(2));
+        double rightMin = Math.min(Math.min(getSonarRange(3), getSonarRange(4)), getSonarRange(5));
+        double frontMin = Math.min(leftMin, rightMin);
+
+        final double THRESH  = 0.40; // m
+        final int    STEP_MS = 120;  // petit pas non bloquant
+
+        if (frontMin <= THRESH) {
+            avoid(); // ta méthode existante
+        } else {
+            move(vel * 0.8f, STEP_MS);
+        }
+    }
+
 
     /**
      * Method     : Controller::update()
@@ -826,25 +868,25 @@ public class Controller {
      **/
     public void update() {
         // Read from image test:
-//        int x = getImageWidth()/2;
-//        int y = getImageHeight()/2;
-//        System.out.println("pixel[" + x + "," + y + "]: " + getImagePixel(x, y));
-//        System.out.println("target[" + getTargetX() + "," + getTargetY() + "]: " + getTargetMaxScore());
+//    int x = getImageWidth()/2;
+//    int y = getImageHeight()/2;
+//    System.out.println("pixel[" + x + "," + y + "]: " + getImagePixel(x, y));
+//    System.out.println("target[" + getTargetX() + "," + getTargetY() + "]: " + getTargetMaxScore());
 
         // Write on image test:
-//        for(x=0 ; x<(getImageWidth()/3)  ; x++)
-//        for(y=0 ; y<(getImageHeight()/3) ; y++)
-//        setImagePixel(x, y, 128);
-//        displayImage();
+//    for(x=0 ; x<(getImageWidth()/3)  ; x++)
+//    for(y=0 ; y<(getImageHeight()/3) ; y++)
+//    setImagePixel(x, y, 128);
+//    displayImage();
 
         // Template matching:
         templateMatchingCV(getImage());
 
         // Print sensors test:
-//        System.out.println("\nWheel(R): " + getRightWheelEnc() + ", Wheel(L): " + getLeftWheelEnc()); // Wheel revolutions.
-//        System.out.println("GPS(X): " + getGPSX() + ", GPS(Y): " + getGPSY() + ", GPS(Z): " + getGPSZ()); // GPS coordinates.
-//        System.out.println("C: " + getBatteryCapacity() + "v, P: " + getBatteryPercentage() + "%, S: " + getBatteryState() + ", T: " + getBatteryTime() + "sec"); // Battery stats.
-//        for(int i=0 ; i<getSonarNo() ; i++) System.out.println(i + ": " + Utils.getDecimal(getSonarRange(i), "0.0")); // Print ultrasonic ranges.
+//    System.out.println("\nWheel(R): " + getRightWheelEnc() + ", Wheel(L): " + getLeftWheelEnc()); // Wheel revolutions.
+//    System.out.println("GPS(X): " + getGPSX() + ", GPS(Y): " + getGPSY() + ", GPS(Z): " + getGPSZ()); // GPS coordinates.
+//    System.out.println("C: " + getBatteryCapacity() + "v, P: " + getBatteryPercentage() + "%, S: " + getBatteryState() + ", T: " + getBatteryTime() + "sec"); // Battery stats.
+//    for(int i=0 ; i<getSonarNo() ; i++) System.out.println(i + ": " + Utils.getDecimal(getSonarRange(i), "0.0")); // Print ultrasonic ranges.
     }
 
     /**
@@ -864,187 +906,90 @@ public class Controller {
      * Purpose    : To run a custom Subsumption Architecture.
      * Parameters : None.
      * Returns    : Nothing.
-     * Notes      : None
+     * Notes      : None.
      **/
-
-    // Affiche le nouveau bouton
-    private void updateModeUI() {
-        if (btnMode == null) return; // au cas où non chargé
-        String label = (mode == MODE_AUTO) ? "Mode: AUTO"
-                : (mode == MODE_MANU) ? "Mode: MANU"
-                : "Mode: ROUTE";
-        btnMode.setText(label);
-    }
-
-    @FXML
-    private void toggleMode() {
-        if (mode == MODE_MANU) {
-            // passer en AUTO
-            mode = MODE_AUTO;
-            // petit reset des détecteurs utiles à l'auto
-            stuckRefDist = null;
-            stuckSinceMs = 0;
-            progInit     = false;
-            // astuce: mettre dir = 's' pour autoriser l'auto à prendre la main si tu gardes ce garde-fou
-            dir = 's';
-        } else {
-            // passer en MANU
-            mode = MODE_MANU;
-            // en manuel on ne pousse plus de commandes auto
-        }
-        updateModeUI();
-    }
-
-    // choix du mode
-    private void setMode(int newMode) {
-        if (this.mode != newMode) {
-            // Remet à zéro quelques détecteurs quand on quitte le manuel
-            if (newMode == MODE_AUTO || newMode == MODE_ROUTE) {
-                stuckRefDist = null;
-                stuckSinceMs = 0;
-                progInit     = false; // force la ré-init de la progression
-            }
-            this.mode = newMode;
-            System.out.println("Mode -> " + newMode);
-        }
-    }
-
-    private double dist2D(double x1, double y1, double x2, double y2) {
-        double dx = x2 - x1, dy = y2 - y1;
-        return Math.sqrt(dx*dx + dy*dy);
-    }
-
-
-    public void run() {
+    public void run()
+    {
         Integer priority[] = new Integer[2];
+        //        int priority[] = new int[4];
 
-        double cam = getTargetMaxScore();
-        double bat = getBatteryCapacity();
-        double snr = Arrays.stream(getSonarRanges()).min().getAsDouble();
-        double gps = Utils.getEuclidean(CHARGER_XCOORD, getGPSY(), getGPSX(), CHARGER_YCOORD);
-        double sensors[] = new double[]{bat, snr, cam, gps};
+        double cam = getTargetMaxScore();                                                      // Target horizontal detection (pixels).
+        double bat = getBatteryCapacity();                                                     // Battery capacity (volts).
+        double snr = Arrays.stream(getSonarRanges()).min().getAsDouble();                      // Min sonar range radius (meters).
+        double gps = Utils.getEuclidean(CHARGER_XCOORD, getGPSY(), getGPSX(), CHARGER_YCOORD); // GPS distance from charger.
+        double sensors[] = new double[]{bat, snr, cam, gps};                                   // Sensor vector.
 
-        double sonarData[] = new double[]{
-                getSonarRange(0), getSonarRange(1), getSonarRange(2),
-                getSonarRange(3), getSonarRange(4), getSonarRange(5)
-        };
+        double sonarData[] = new double[]
+                {
+                        getSonarRange(0),
+                        getSonarRange(1),
+                        getSonarRange(2),
+                        getSonarRange(3),
+                        getSonarRange(4),
+                        getSonarRange(5)
+                };
 
+        // --- Sélection par mode ---
         switch (mode) {
-            case MODE_MANU:
-                // ÉTAT 1 : MANUEL
-                // Ne rien faire ici : on laisse 100% la main aux commandes utilisateur (flèches/boutons).
-                // Surtout ne pas appeler avoid(), move(), etc. depuis l’auto.
-                return;
+            case MODE_AUTO:
+                autoStep();   // avance + évitement via avoid() si obstacle proche
+                break;
 
             case MODE_ROUTE:
-                // ÉTAT 3 : SUIVI DE ROUTE (placeholder)
-                // TODO: ici on mettra la logique de suivi (ligne/waypoints) + évitement si tu veux.
-                // Pour l’instant, on ne fait rien pour ne pas interférer.
-                return;
+                // routeStep(); // (à implémenter plus tard)
+                // Fallback de sécurité en attendant la ROUTE :
+                avoid();
+                break;
 
-            case MODE_AUTO:
+            case MODE_MANU:
             default:
-                // ÉTAT 0 : AUTO "de base" (ton code actuel)
-                break; // on tombe sur le bloc auto juste en-dessous
-        }
-
-        // dispatcher par mode
-        if (mode == MODE_MANU) {
-            // ÉTAT 1 : manuel -> ne rien faire ici, on laisse l'utilisateur piloter
-            return;
-        }
-        // (MODE_ROUTE sera géré plus tard)
-
-
-        // ========= TON CODE AUTO ACTUEL (ÉTAT 0) =========
-        if (dir == 's') { // AUTO uniquement quand Stop est actif
-
-            // --- Réglages ---
-            final double ENTER_TH     = 0.30;  // axe avant "bouché" si < 0.30 m
-            final double PASS_MARGIN  = 0.25;  // couloir acceptable sur au moins un côté
-            final float  CRUISE       = 2.0f;  // avance normale
-            final float  CRUISE_SLOW  = 1.2f;  // avance prudente
-
-            // Détection de STALL (pas de progression)
-            final double PROG_EPS     = 0.02;  // 2 cm minimum de déplacement
-            final long   PROG_TIMEOUT = 2000;  // 2 s sans progresser => bloqué
-            final int    ESC_BACK_MS  = 1000;  // recul ms
-            final float  ESC_BACK_VEL = -1.2f; // vitesse de recul
-            final int    ESC_TURN_MS  = 750;   // ~90° (ajuste si besoin)
-            final float  ESC_TURN_VEL =  vel/3;// un peu plus vif que vel/4
-
-            // Mapping capteurs
-            final int FRONT_SENSOR = 2; // ajuste si besoin
-
-            // 1) Distances utiles
-            double frontAxis = getSonarRange(FRONT_SENSOR);
-            double minLeft   = Math.min(Math.min(getSonarRange(0), getSonarRange(1)), getSonarRange(2));
-            double minRight  = Math.min(Math.min(getSonarRange(3), getSonarRange(4)), getSonarRange(5));
-
-            // 2) Détection "pas de progression"
-            double x = getGPSX(), y = getGPSY();
-            long now = System.currentTimeMillis();
-
-            if (!progInit) { lastProgX = x; lastProgY = y; lastProgTs = now; progInit = true; }
-
-            boolean noProgress = false;
-            double d = dist2D(lastProgX, lastProgY, x, y);
-            if (d >= PROG_EPS) {
-                lastProgX = x; lastProgY = y; lastProgTs = now;
-            } else if (now - lastProgTs >= PROG_TIMEOUT) {
-                noProgress = true;
-                lastProgX = x; lastProgY = y; lastProgTs = now; // évite retrigger en chaine
-            }
-
-            // 3) Échappement si bloqué (recul, pause, 90°, pause, reprise)
-            if (noProgress) {
-                final int   PAUSE_MS      = 150;
-                final float CRUISE_RESUME = 1.6f;
-                final int   RESUME_MS     = 600;
-
-                move(ESC_BACK_VEL, ESC_BACK_MS);
-                move(0f, PAUSE_MS);
-
-                boolean turnRight = (minRight >= minLeft); // tourner vers le côté le plus dégagé
-                if (turnRight) turnSpot(+ESC_TURN_VEL, ESC_TURN_MS);
-                else           turnSpot(-ESC_TURN_VEL, ESC_TURN_MS);
-
-                move(0f, PAUSE_MS);
-                move(CRUISE_RESUME, RESUME_MS);
-
-                // reset progression
-                lastProgX = getGPSX(); lastProgY = getGPSY(); lastProgTs = System.currentTimeMillis();
-                return;
-            }
-
-            // 4) Logique normale (cône très étroit + couloir)
-            if (frontAxis >= ENTER_TH) {
-                move(CRUISE);
-            } else {
-                if (minLeft > PASS_MARGIN || minRight > PASS_MARGIN) {
-                    move(CRUISE_SLOW);
-                } else {
-                    avoid();
-                }
-            }
+                // En manuel : on laisse l'utilisateur piloter via l'UI.
+                // Si tu veux un filet de sécurité, décommente la ligne suivante :
+                // avoid();
+                break;
         }
     }
+
 
     public void avoid()
     {
-        double leftMinSonarRadius  = Arrays.stream(new double[]{getSonarRange(0), getSonarRange(1), getSonarRange(2)}).min().getAsDouble();
-        double rightMinSonarRadius = Arrays.stream(new double[]{getSonarRange(3), getSonarRange(4), getSonarRange(5)}).min().getAsDouble();
+        // 1) Regroupe les sonars
+        double leftMin  = Arrays.stream(new double[]{getSonarRange(0), getSonarRange(1), getSonarRange(2)}).min().orElse(10.0);
+        double rightMin = Arrays.stream(new double[]{getSonarRange(3), getSonarRange(4), getSonarRange(5)}).min().orElse(10.0);
 
-        if(leftMinSonarRadius < rightMinSonarRadius)
-        {
-            turnSpot(vel/4, 500);
+        // 2) Seuil de déclenchement : n’agis que si obstacle "proche"
+        final double THRESH = 0.80; // en mètres, ajuste selon ta scène
+        double frontMin = Math.min(leftMin, rightMin);
+        if (frontMin > THRESH) {
+            return; // rien à éviter
         }
-        else
-        if(leftMinSonarRadius > rightMinSonarRadius)
-        {
-            turnSpot(-vel/4, 500);
+
+        // 3) (Optionnel) ne déclencher qu’en AVANT.
+        //    Si tu as une variable de direction (ex: dir == 'u' pour up/avant),
+        //    décommente:
+        // if (dir != 'u') return;
+
+        // 4) Petit recul pour se dégager, puis pivot
+        move(-vel/2, 180);   // recule un court instant
+
+        // 5) Choix du sens et "intensité" selon l’asymétrie
+        double diff = rightMin - leftMin;  // >0 => gauche plus proche => tourne à droite
+        // facteur 0.3..1.0 selon à quel point c’est déséquilibré
+        double gain = Math.min(1.0, Math.max(0.3, Math.abs(diff) / THRESH));
+        int turnMs  = (int)(250 + 400 * gain);  // 250..650 ms
+
+        if (diff > 0) {
+            // obstacle plus proche à gauche -> tourne à droite
+            turnSpot(-vel/2, turnMs);
+        } else if (diff < 0) {
+            // obstacle plus proche à droite -> tourne à gauche
+            turnSpot(+vel/2, turnMs);
+        } else {
+            // égalité : choisis un côté par défaut (ou aléatoire)
+            turnSpot(+vel/2, 300);
         }
     }
+
 
     /**
      * Method     : Controller::tlu()
