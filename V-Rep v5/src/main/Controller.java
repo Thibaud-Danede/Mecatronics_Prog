@@ -791,71 +791,237 @@ public class Controller {
         }
     };
 
+
+
+
+
+
+
     /********************************************************************************************************************
      *                                                   Student Code                                                   *
      ********************************************************************************************************************/
+
+
+
+
+
+
+
+
 //    private FSM avoid = new Avoid(3, 100);
 //    private FSM track  = new Track( 75, 3);
 //    private FSM clean  = new Clean( 50, 3);
 //    private FSM wander = new Wander(3, 25);
 
-//
-// --- Stubs pour éviter les erreurs si le FXML appelle ces méthodes
-//     (ne dépendent d’aucune variable externe ; sans effet si le bouton n’existe pas) ---
-//
+    // Indique si on est actuellement en phase 2 du track (approche dock)
+    private boolean inTrackPhase2 = false;
+
+
+    // Indique si on considère que le robot est bien docké
+    private boolean trackDocked = false;
+
+
+    // --- Odométrie simple avec les encodeurs ---
+    private boolean odoInit = false;
+    private double lastLeftEnc  = 0.0;
+    private double lastRightEnc = 0.0;
+    private double odoTheta     = 0.0; // orientation estimée (rad)
+
+    // Paramètres mécaniques approximatifs du Roomba
+    private static final double WHEEL_RADIUS = 0.035; // ~3.5 cm
+    private static final double WHEEL_BASE   = 0.27;  // ~27 cm entre les roues
+
+
+    // --- État Track phase 1 (retour GPS) ---
+    private boolean trackPhase1Init      = false;
+    private double  trackLastDistToDock  = Double.MAX_VALUE;
+    private boolean trackTurnRight       = true; // alterne gauche/droite quand on doit se réorienter
+
+    private boolean trackJustTurned      = false;
+
+
+    // --- Position de la station de charge (dock) ---
+    private boolean dockPositionInitialized = false;
+    private double dockX = CHARGER_XCOORD;  // valeur de secours
+    private double dockY = CHARGER_YCOORD;  // valeur de secours
+
+    // Seuils pour le comportement Track
+    // Au-delà de TRACK_NEAR_DIST : on est "loin" → phase GPS
+    // En dessous de TRACK_NEAR_DIST : on est dans la zone de docking → phase caméra
+    // En dessous de TRACK_DOCKED_DIST : on considère qu'on est docké
+    private static final double TRACK_NEAR_DIST   = 0.35;   // m
+    private static final double TRACK_DOCKED_DIST = 0.20;  // m
+    // Par exemple, 8 cm de marge en plus
+    private static final double TRACK_DOCKED_MARGIN = 0.08;
+
+    // Pour vérifier que la pose de docking reste bonne sur une courte durée
+    private long dockStableSinceMs = 0;
+
+
+
+    // Pour n'appliquer l'override de batterie qu'une seule fois
+    private boolean batteryDevOverrideDone = false;
+
+    // Log batterie périodique
+    private long lastBatteryLogTimeMs = 0;
+
+    // Phase de démarrage (pour se dégager du mur initial)
+    private boolean startupDone = false;
+
+
+    // --- FSM pour Clean (pattern rectangulaire) ---
+    private static final int CLEAN_STATE_INIT    = 0;
+    private static final int CLEAN_STATE_FORWARD = 1;
+    private static final int CLEAN_STATE_TURN    = 2;
+
+    private int    cleanState      = CLEAN_STATE_INIT;
+    private int    cleanSideIndex  = 0;       // 0..3 pour 4 côtés du rectangle
+    private double cleanStartX     = 0.0;
+    private double cleanStartY     = 0.0;
+
+    // Paramètres du motif rectangulaire (à ajuster en simulation)
+    private static final double CLEAN_SIDE_LENGTH   = 1.0;  // longueur d’un côté (en mètres environ)
+    private static final int    CLEAN_STEP_TIME_MS  = 150;  // durée d’un “pas” en ligne droite
+    private static final int    CLEAN_TURN_TIME_MS  = 1600;  // temps approximatif pour tourner 90°
+
+    // --- Stubs pour éviter les erreurs si le FXML appelle ces méthodes
+    //     (ne dépendent d’aucune variable externe ; sans effet si le bouton n’existe pas) ---
+    //
+    // Détection de blocage (stuck)
+    private double lastStuckCheckX = 0.0;
+    private double lastStuckCheckY = 0.0;
+    private long   lastStuckCheckTimeMs = 0;
+    private int    stuckCounter = 0;
+
+
 
     // --- MODES (utiles pour le cycle MANU → ROUTE → AUTO) ---
     private static final int MODE_AUTO  = 0;
     private static final int MODE_MANU  = 1;
-    private static final int MODE_ROUTE = 3;
+
+    // --- IDs de comportements (pour le debug) ---
+    private static final int BEH_NONE   = 0;
+    private static final int BEH_AVOID  = 1;
+    private static final int BEH_TRACK  = 2;
+    private static final int BEH_CLEAN  = 3;
+    private static final int BEH_WANDER = 4;
+
+    // Comportement actuellement actif (pour détecter les changements)
+    private int currentBehavior = BEH_NONE;
 
     // État courant du mode. Tu peux choisir le démarrage que tu veux.
     // Pour coller au label initial du FXML ("Mode: AUTO"), mets MODE_AUTO.
     // Si tu préfères démarrer MANU, mets MODE_MANU.
-    private int mode = MODE_MANU;
+    private int mode = MODE_AUTO;
 
     @FXML private Button btnMode; // si déjà déclaré ailleurs, supprime cette ligne
 
     // Met à jour le libellé du bouton selon le mode courant
     private void updateModeUI() {
         if (btnMode == null) return;
-        String label = (mode == MODE_AUTO) ? "Mode: AUTO"
-                : (mode == MODE_MANU) ? "Mode: MANU"
-                : "Mode: ROUTE";
+        String label = (mode == MODE_AUTO) ? "Mode: AUTO" : "Mode: MANU";
         btnMode.setText(label);
     }
 
-    // Handler appelé par le FXML: onAction="#toggleMode"
     @FXML
     private void toggleMode() {
-        // Cycle MANU -> ROUTE -> AUTO -> MANU
-        if (mode == MODE_MANU) {
-            System.out.println("Passage en mode route");
-            mode = MODE_ROUTE;
-        } else if (mode == MODE_ROUTE) {
-            System.out.println("Passage en mode auto");
-            mode = MODE_AUTO;
-        } else {
-            System.out.println("Passage en mode manuel");
+        if (mode == MODE_AUTO) {
             mode = MODE_MANU;
+            System.out.println("Mode -> MANU (pilotage manuel)");
+        } else {
+            mode = MODE_AUTO;
+            System.out.println("Mode -> AUTO (subsomption)");
         }
         updateModeUI();
     }
 
-    // Avance tant qu'il n'y a rien devant ; sinon délègue à avoid()
-    private void autoStep() {
-        double leftMin  = Math.min(Math.min(getSonarRange(0), getSonarRange(1)), getSonarRange(2));
-        double rightMin = Math.min(Math.min(getSonarRange(3), getSonarRange(4)), getSonarRange(5));
-        double frontMin = Math.min(leftMin, rightMin);
+    // Retourne true quand la phase de démarrage est terminée
+    private boolean startupStep() {
+        // On regarde "devant" : les sonars 1 et 4 (légèrement orientés)
+        double frontLeft  = getSonarRange(1);
+        double frontRight = getSonarRange(4);
+        double frontMin   = Math.min(frontLeft, frontRight);
 
-        final double THRESH  = 0.40; // m
-        final int    STEP_MS = 120;  // petit pas non bloquant
+        final double SAFE_DIST = 0.6; // distance "confortable" à dégager (à ajuster)
 
-        if (frontMin <= THRESH) {
-            avoid(); // ta méthode existante
+        if (frontMin < SAFE_DIST) {
+            // Trop près du mur : on tourne sur place pour élargir l'angle
+            System.out.println("[STARTUP] Trop près du mur, rotation d'évitement");
+            // Ici on tourne sur place : pas de risque de rentrer dans le mur
+            turnSpot(vel/2.0f, 3200);
+            return false; // pas encore fini
         } else {
-            move(vel * 0.8f, STEP_MS);
+            // On considère qu'on est suffisamment dégagé pour lancer le mode AUTO normal
+            System.out.println("[STARTUP] Démarrage terminé, passage en AUTO classique");
+            return true;
         }
+    }
+
+
+
+    // Comportement Clean : motif rectangulaire simple
+    public void clean() {
+        switch (cleanState) {
+            case CLEAN_STATE_INIT:
+                // On mémorise la position de départ de ce côté
+                cleanStartX = getGPSX();
+                cleanStartY = getGPSY();
+                cleanState  = CLEAN_STATE_FORWARD;
+                break;
+
+            case CLEAN_STATE_FORWARD:
+                // Distance parcourue depuis le début de ce côté
+                double dx   = getGPSX() - cleanStartX;
+                double dy   = getGPSY() - cleanStartY;
+                double dist = Math.sqrt(dx * dx + dy * dy);
+
+                if (dist < CLEAN_SIDE_LENGTH) {
+                    // On continue tout droit par petits pas
+                    move(vel * 0.8f, CLEAN_STEP_TIME_MS);
+                } else {
+                    // On a atteint la longueur voulue, on passera au virage
+                    cleanState = CLEAN_STATE_TURN;
+                }
+                break;
+
+            case CLEAN_STATE_TURN:
+                // Tour sur place d’environ 90°
+                // (CLEAN_TURN_TIME_MS est à ajuster pour un quart de tour)
+                turnSpot(vel / 2.0f, CLEAN_TURN_TIME_MS);
+
+                // On passe au côté suivant
+                cleanSideIndex = (cleanSideIndex + 1) % 4;
+
+                // Et on recommence un nouveau segment
+                cleanState = CLEAN_STATE_INIT;
+                break;
+
+            default:
+                // Sécurité : on réinitialise si jamais on tombe dans un état inconnu
+                cleanState = CLEAN_STATE_INIT;
+                break;
+        }
+    }
+
+
+    public void wander() {
+        System.out.println("[AUTO] Wander: manœuvre aléatoire");
+
+        // Choix aléatoire gauche/droite
+        double rnd = Math.random();
+        float turnVel = vel / 2.0f;
+        int turnTime = 300 + (int)(Math.random() * 700); // 300-1000 ms
+
+        if (rnd < 0.5) {
+            // tourne à gauche
+            turnSpot(-turnVel, turnTime);
+        } else {
+            // tourne à droite
+            turnSpot(turnVel, turnTime);
+        }
+
+        // Petite avance après la rotation
+        move(vel * 0.8f, 400);
     }
 
 
@@ -910,13 +1076,62 @@ public class Controller {
      **/
     public void run()
     {
+        // 0) Si on est déjà docké, on coupe tout comportement automatique
+        if (trackDocked) {
+            // On s'assure que les moteurs sont bien à l'arrêt
+            setVel(0, 0);
+            dir = 's';
+
+            // Optionnel : on log une seule fois le passage en état "dock"
+            if (currentBehavior != BEH_NONE) {
+                System.out.println("[AUTO] Dock atteint -> arrêt définitif des comportements automatiques.");
+                currentBehavior = BEH_NONE;
+            }
+
+            // On ne fait plus AUCUNE décision auto tant que trackDocked reste true
+            return;
+        }
+
+        // Mise à jour de l'orientation estimée à partir des encodeurs
+        updateOdometry();
+
+        // 1) Initialiser la position de docking une seule fois au début
+        if (!dockPositionInitialized) {
+            double x = getGPSX();
+            double y = getGPSY();
+
+            // Évite de prendre (0,0) avant la première vraie lecture GPS
+            if (Math.abs(x) > 1e-3 || Math.abs(y) > 1e-3) {
+                dockX = x;
+                dockY = y;
+                dockPositionInitialized = true;
+                System.out.println("[DOCK] Position de la station enregistrée: X=" + dockX + "  Y=" + dockY);
+            }
+        }
+
+        // Override dev : batterie plus courte (ex: 2 minutes)
+        if (!batteryDevOverrideDone) {
+            setBatteryTime(2);  // 2 minutes au lieu de 20
+            batteryDevOverrideDone = true;
+            System.out.println("[BATT] Override dev: batterie réglée sur 2 minutes.");
+        }
+
         Integer priority[] = new Integer[2];
         //        int priority[] = new int[4];
 
         double cam = getTargetMaxScore();                                                      // Target horizontal detection (pixels).
         double bat = getBatteryCapacity();                                                     // Battery capacity (volts).
         double snr = Arrays.stream(getSonarRanges()).min().getAsDouble();                      // Min sonar range radius (meters).
-        double gps = Utils.getEuclidean(CHARGER_XCOORD, getGPSY(), getGPSX(), CHARGER_YCOORD); // GPS distance from charger.
+
+        // On utilise la position dynamique du dock si elle est connue,
+        // sinon on retombe sur les constantes d'origine.
+        double dockXUsed = dockPositionInitialized ? dockX : CHARGER_XCOORD;
+        double dockYUsed = dockPositionInitialized ? dockY : CHARGER_YCOORD;
+
+        double gps = Utils.getEuclidean(
+                getGPSX(), getGPSY(),
+                dockXUsed, dockYUsed
+        );
         double sensors[] = new double[]{bat, snr, cam, gps};                                   // Sensor vector.
 
         double sonarData[] = new double[]
@@ -929,18 +1144,27 @@ public class Controller {
                         getSonarRange(5)
                 };
 
+        // --- Log batterie toutes les ~10 secondes ---
+        long now = System.currentTimeMillis();
+        if (now - lastBatteryLogTimeMs >= 10_000) { // 10 000 ms = 10 s
+            lastBatteryLogTimeMs = now;
+
+            double v  = getBatteryCapacity();
+            double pc = getBatteryPercentage();
+            int    t  = getBatteryTime(); // temps écoulé en secondes
+
+            System.out.printf(
+                    "[BATT] V=%.2f V, P=%.0f%%, t=%d s%n",
+                    v, pc, t
+            );
+        }
+
         // --- Sélection par mode ---
         switch (mode) {
             case MODE_AUTO:
-                autoStep();   // avance + évitement via avoid() si obstacle proche
+                // Utilisation des TLUs pour choisir Avoid / Track / etc.
+                autoModeWithTLU(cam, bat, snr, gps);
                 break;
-
-            case MODE_ROUTE:
-                // routeStep(); // (à implémenter plus tard)
-                // Fallback de sécurité en attendant la ROUTE :
-                avoid();
-                break;
-
             case MODE_MANU:
             default:
                 // En manuel : on laisse l'utilisateur piloter via l'UI.
@@ -951,44 +1175,396 @@ public class Controller {
     }
 
 
-    public void avoid()
+    /**
+     * Mode AUTO : sélection de comportement via TLUs + subsomption.
+     *
+     * capteurs bruts :
+     *  - cam : score de template matching ([-1,1] typiquement)
+     *  - bat : capacité batterie (0..12 V)
+     *  - snr : distance min sonar (0..1 m, 1 = loin ou rien détecté)
+     *  - gps : distance au chargeur (en m)
+     */
+    private void autoModeWithTLU(double cam, double bat, double snr, double gps)
     {
-        // 1) Regroupe les sonars
-        double leftMin  = Arrays.stream(new double[]{getSonarRange(0), getSonarRange(1), getSonarRange(2)}).min().orElse(10.0);
-        double rightMin = Arrays.stream(new double[]{getSonarRange(3), getSonarRange(4), getSonarRange(5)}).min().orElse(10.0);
-
-        // 2) Seuil de déclenchement : n’agis que si obstacle "proche"
-        final double THRESH = 0.80; // en mètres, ajuste selon ta scène
-        double frontMin = Math.min(leftMin, rightMin);
-        if (frontMin > THRESH) {
-            return; // rien à éviter
+        // ---------- Phase de démarrage : se dégager du mur initial ----------
+        if (!startupDone) {
+            // Tant que startupStep() renvoie false, on ne fait que ça
+            if (startupStep()) {
+                startupDone = true;
+            }
+            return; // on ne lance pas encore les TLUs / subsomption
         }
 
-        // 3) (Optionnel) ne déclencher qu’en AVANT.
-        //    Si tu as une variable de direction (ex: dir == 'u' pour up/avant),
-        //    décommente:
-        // if (dir != 'u') return;
+        // ---------- Normalisation des capteurs dans [0,1] ----------
 
-        // 4) Petit recul pour se dégager, puis pivot
-        move(-vel/2, 180);   // recule un court instant
+        double batNorm = clamp01(Utils.map(bat, 0.0, (double) MAX_BATT_VOLT, 0.0, 1.0));
+        double batLow  = 1.0 - batNorm;
 
-        // 5) Choix du sens et "intensité" selon l’asymétrie
-        double diff = rightMin - leftMin;  // >0 => gauche plus proche => tourne à droite
-        // facteur 0.3..1.0 selon à quel point c’est déséquilibré
-        double gain = Math.min(1.0, Math.max(0.3, Math.abs(diff) / THRESH));
-        int turnMs  = (int)(250 + 400 * gain);  // 250..650 ms
+        double snrClamped = clamp01(snr);
+        double snrClose   = 1.0 - snrClamped;
 
-        if (diff > 0) {
-            // obstacle plus proche à gauche -> tourne à droite
-            turnSpot(-vel/2, turnMs);
-        } else if (diff < 0) {
-            // obstacle plus proche à droite -> tourne à gauche
-            turnSpot(+vel/2, turnMs);
-        } else {
-            // égalité : choisis un côté par défaut (ou aléatoire)
-            turnSpot(+vel/2, 300);
+        double gpsClamped = Math.min(gps, MAX_GPS_DIST);
+        double gpsNear    = 1.0 - (gpsClamped / MAX_GPS_DIST);
+        gpsNear = clamp01(gpsNear);
+
+        double camNorm = clamp01((cam + 1.0) / 2.0);
+
+        // ---------- TLU Avoid ----------
+        double[] sAvoid = { snrClose };
+        double[] wAvoid = { 1.0 };
+        double fAvoid   = 0.6;
+
+        boolean avoidActive = tlu(wAvoid, sAvoid, fAvoid);
+
+        // ---------- TLU Track : s'active quand la batterie est faible ----------
+
+        // batLow ~ 0.0 => batterie pleine
+        // batLow ~ 1.0 => batterie très faible
+        double[] sTrack = { batLow };
+        double[] wTrack = { 1.0 };
+
+        // Seuil : par ex. 0.8 → Track s'active quand batLow > 0.8,
+        // c'est-à-dire quand la batterie est vraiment faible (~≤ 20 %)
+        double fTrack = 0.2;
+
+        boolean trackActive = tlu(wTrack, sTrack, fTrack);
+
+
+        // ---------- Clean & Wander ----------
+        // Clean = comportement de fond ; Wander = si bloqué
+        boolean isStuckNow = isStuck();
+
+        // ---------- Subsomption : (Track phase 2) > Avoid > Track > Clean > Wander ----------
+        int newBehavior;
+
+        if (inTrackPhase2) {
+            // En phase 2 de Track, on ne laisse plus Avoid prendre la main.
+            newBehavior = BEH_TRACK;
+        }
+        else if (avoidActive) {
+            newBehavior = BEH_AVOID;
+        }
+        else if (trackActive) {
+            newBehavior = BEH_TRACK;
+        }
+        else if (!isStuckNow) {
+            newBehavior = BEH_CLEAN;
+        }
+        else {
+            newBehavior = BEH_WANDER;
+        }
+
+
+        // Log si changement
+        logBehaviorChangeIfNeeded(newBehavior);
+
+        // Exécution
+        switch (newBehavior) {
+            case BEH_AVOID:
+                avoid();
+                break;
+
+            case BEH_TRACK:
+                track();
+                break;
+
+            case BEH_WANDER:
+                wander();
+                break;
+
+            case BEH_CLEAN:
+            default:
+                clean();
+                break;
         }
     }
+
+
+    // Comportement Track : retour vers le dock + approche fine avec la caméra
+    public void track()
+    {
+        // Si on a déjà considéré que le robot est docké, on ne bouge plus
+        if (trackDocked) {
+            setVel(0, 0);
+            dir = 's';
+            inTrackPhase2 = false;   // plus en phase 2
+            return;
+        }
+
+        // Sécurité : si la position du dock n'est pas encore initialisée
+        if (!dockPositionInitialized) {
+            System.out.println("[TRACK] Dock non initialisé, fallback: avance lente.");
+            inTrackPhase2 = false;
+            move(vel * 0.5f, 200);
+            return;
+        }
+
+        // Distance au dock (position enregistrée au démarrage)
+        double distToDock = Utils.getEuclidean(
+                getGPSX(), getGPSY(),
+                dockX,     dockY
+        );
+
+        // Par défaut : on considère qu'on n'est pas en phase 2
+        inTrackPhase2 = false;
+
+        // PHASE 1 : loin du dock -> on utilise le GPS + odométrie pour revenir vers la zone
+        if (distToDock > TRACK_NEAR_DIST) {
+            trackReturnToDock(distToDock);
+        }
+        // PHASE 2 : proche du dock -> on utilise la caméra pour s'aligner et se poser
+        else {
+            inTrackPhase2 = true; // <<< important : on signale qu'on est en Phase 2
+            trackDockingApproach(distToDock);
+        }
+    }
+    // Phase 1 du Track : retour vers la zone du dock en s'orientant grâce aux encodeurs
+    private void trackReturnToDock(double distToDock)
+    {
+        // Position actuelle (monde) via GPS
+        double x = getGPSX();
+        double y = getGPSY();
+
+        // Vecteur vers le dock
+        double dx = dockX - x;
+        double dy = dockY - y;
+
+        // Angle absolu dans le monde vers le dock
+        double targetAngle = Math.atan2(dy, dx);
+
+        // Orientation estimée du robot via odométrie
+        double yaw = odoTheta;
+
+        // Différence d'angle à corriger
+        double diff = normalizeAngle(targetAngle - yaw);
+
+        System.out.println(String.format(
+                "[TRACK] Phase 1: dist=%.2f m, yaw=%.2f rad, target=%.2f rad, diff=%.2f rad",
+                distToDock, yaw, targetAngle, diff
+        ));
+
+        // Tolérance : si |diff| < 10°, on considère qu'on est à peu près aligné
+        double ANGLE_TOL = Math.toRadians(10.0);
+
+        if (Math.abs(diff) > ANGLE_TOL) {
+            // On doit tourner pour s'aligner vers le dock
+            float turnVel  = vel / 3.0f;
+            int   turnTime = 200; // ms
+
+            if (diff > 0) {
+                // Dock "à gauche" de la direction actuelle -> tourne à gauche
+                System.out.println("[TRACK] Phase 1: dock à gauche -> rotation gauche.");
+                turnSpot(-turnVel, turnTime);
+            } else {
+                // Dock "à droite" -> tourne à droite
+                System.out.println("[TRACK] Phase 1: dock à droite -> rotation droite.");
+                turnSpot(turnVel, turnTime);
+            }
+        } else {
+            // Assez aligné -> on avance vers le dock
+            System.out.println("[TRACK] Phase 1: aligné -> avance vers le dock.");
+            move(vel * 0.8f, 250);
+        }
+    }
+    // Phase 2 du Track : caméra uniquement, pour orientation + petits pas vers le dock
+    private void trackDockingApproach(double distToDock)
+    {
+        System.out.println("[TRACK] Phase 2: approche caméra (dist ≈ "
+                + String.format("%.2f", distToDock) + " m)");
+
+        double score   = getTargetMaxScore();
+        int    imgW    = getImageWidth();
+        int    targetX = getTargetX();
+        int    centerX = imgW / 2;
+        int    dx      = targetX - centerX;
+
+        // Seuils de qualité de détection du marqueur
+        final double SCORE_MIN_SEARCH = 0.25; // "je vois quelque chose"
+        final double SCORE_MIN_DOCK   = 0.42;  // score exigé pour valider le dock
+
+        // Bande morte "orientation" (phase d'approche) : tant qu'on n'est pas dans cette zone, on NE FAIT QUE TOURNER
+        int deadBandOrient = imgW / 10;   // ±10% de la largeur
+
+        // Bande morte "dock" : assez centré pour la condition finale (un peu plus large qu'avant)
+        int deadBandDock   = imgW / 14;   // au lieu de /30 ou /18
+
+        long now = System.currentTimeMillis();
+
+        // 1) Si le marqueur est quasi invisible -> recherche en rotation, ne pas avancer
+        if (score < SCORE_MIN_SEARCH) {
+            dockStableSinceMs = 0;
+            System.out.println("[TRACK] P2: marqueur non vu (score="
+                    + String.format("%.2f", score)
+                    + "), rotation de recherche.");
+            turnSpot(vel / 3.0f, 250);
+            return;
+        }
+
+        // 2) Si on est encore PLUS LOIN que la distance cible de dock (0.20 m) :
+        //    on fait ORIENTATION PUIS petit pas en avant
+        if (distToDock > TRACK_DOCKED_DIST) {
+            // 2A) Tant que le marqueur est nettement décalé -> rotation ONLY
+            if (Math.abs(dx) > deadBandOrient) {
+                dockStableSinceMs = 0;
+                float turnVel  = vel / 3.0f;
+                int   turnTime = 150;
+
+                if (dx > 0) {
+                    System.out.println("[TRACK] P2: alignement -> marqueur à droite, rotation droite.");
+                    turnSpot(turnVel, turnTime);
+                } else {
+                    System.out.println("[TRACK] P2: alignement -> marqueur à gauche, rotation gauche.");
+                    turnSpot(-turnVel, turnTime);
+                }
+                return;
+            }
+
+            // 2B) Ici : le marqueur est à peu près centré -> petit pas en avant
+            dockStableSinceMs = 0;
+            System.out.println("[TRACK] P2: marqueur centré -> petit pas vers le dock.");
+            move(vel * 0.5f, 200);
+            return;
+        }
+
+        // 3) Zone de docking : distToDock <= TRACK_DOCKED_DIST (~0.20 m)
+        //    On vérifie centrage + score, puis stabilité
+
+        boolean centeredFine = Math.abs(dx) < deadBandDock;
+        boolean goodScore    = score >= SCORE_MIN_DOCK;
+
+        // Si la pose n'est pas encore bonne ET qu'on n'a pas commencé la stabilisation,
+        // on autorise encore de petites rotations. Mais si la stabilisation est en cours,
+        // on ne tourne PLUS (pour éviter les gauche/droite infinies).
+        if ((!centeredFine || !goodScore) && dockStableSinceMs == 0) {
+            float turnVel  = vel / 4.0f;  // plus doux pour éviter des grands zigzags
+            int   turnTime = 120;
+
+            if (!centeredFine) {
+                System.out.println("[TRACK] P2 (dock): recadrage fin (dx=" + dx + ").");
+                if (dx > 0) {
+                    // marqueur à droite -> rotation droite
+                    turnSpot(turnVel, turnTime);
+                } else {
+                    // marqueur à gauche -> rotation gauche
+                    turnSpot(-turnVel, turnTime);
+                }
+            } else {
+                // Centré mais score un peu faible -> micro rotation de "recherche"
+                System.out.println("[TRACK] P2 (dock): score faible ("
+                        + String.format("%.2f", score)
+                        + "), micro rotation.");
+                turnSpot(turnVel, turnTime);
+            }
+            return;
+        }
+
+        // 4) Ici : soit
+        //    - pose vraiment bonne (centeredFine && goodScore),
+        //    - soit on est en phase de stabilisation (dockStableSinceMs > 0) et on ne veut plus tourner.
+        if (dockStableSinceMs == 0) {
+            // On vient d'entrer dans une pose "assez bonne" pour commencer la stabilisation
+            dockStableSinceMs = now;
+            System.out.println("[TRACK] P2: pose dock bonne (dist ≤ 0.20, centré & score OK), on vérifie la stabilité...");
+            setVel(0, 0);
+            return;
+        } else {
+            long dt = now - dockStableSinceMs;
+            if (dt > 600) { // ~0,6 s de pose stable
+                System.out.println("[TRACK] P2: Dock final validé. Arrêt.");
+                setVel(0, 0);
+                dir = 's';
+                trackDocked = true;
+                return;
+            } else {
+                System.out.println("[TRACK] P2: pose stable depuis " + dt + " ms, on attend encore.");
+                setVel(0, 0);
+                return;
+            }
+        }
+    }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    public void avoid()
+    {
+        // Si on est en phase 2 du docking, on ne fait PAS d'évitement classique
+        if (inTrackPhase2) {
+            // Option : tu peux laisser un hard-stop d'urgence ici si les sonars sont < 0.05 m, sinon rien
+            // Exemple ultra simple :
+            double minSonar = Arrays.stream(new double[]{
+                    getSonarRange(0), getSonarRange(1), getSonarRange(2),
+                    getSonarRange(3), getSonarRange(4), getSonarRange(5)
+            }).min().orElse(1.0);
+
+            if (minSonar < 0.05) {
+                // Vraiment collé à un obstacle, on stoppe net:
+                setVel(0, 0);
+            }
+            return;
+        }
+
+        // ... ton code avoid normal ensuite ...
+        double leftMinSonarRadius  = Arrays.stream(new double[]{getSonarRange(0), getSonarRange(1), getSonarRange(2)}).min().getAsDouble();
+        double rightMinSonarRadius = Arrays.stream(new double[]{getSonarRange(3), getSonarRange(4), getSonarRange(5)}).min().getAsDouble();
+
+        if(leftMinSonarRadius < rightMinSonarRadius)
+        {
+            turnSpot(vel/2, 1000);
+        }
+        else if(leftMinSonarRadius > rightMinSonarRadius)
+        {
+            turnSpot(-vel/2, 1000);
+        }
+    }
+
+
+    // Mise à jour de l'orientation estimée à partir des encodeurs
+    private void updateOdometry() {
+        double leftEnc  = getLeftWheelEnc();  // en tours
+        double rightEnc = getRightWheelEnc(); // en tours
+
+        if (!odoInit) {
+            lastLeftEnc  = leftEnc;
+            lastRightEnc = rightEnc;
+            odoTheta     = 0.0;
+            odoInit      = true;
+            return;
+        }
+
+        double dLeftRev  = leftEnc  - lastLeftEnc;
+        double dRightRev = rightEnc - lastRightEnc;
+
+        lastLeftEnc  = leftEnc;
+        lastRightEnc = rightEnc;
+
+        // distance linéaire parcourue par chaque roue (approx), en mètres
+        double dLeft  = 2.0 * Math.PI * WHEEL_RADIUS * dLeftRev;
+        double dRight = 2.0 * Math.PI * WHEEL_RADIUS * dRightRev;
+
+        // variation d'angle du robot (modèle diff-drive)
+        double dTheta = (dRight - dLeft) / WHEEL_BASE;
+
+        odoTheta = normalizeAngle(odoTheta + dTheta);
+    }
+
+    // Normalise un angle en radians dans [-pi, +pi]
+    private double normalizeAngle(double a) {
+        while (a > Math.PI)  a -= 2.0 * Math.PI;
+        while (a < -Math.PI) a += 2.0 * Math.PI;
+        return a;
+    }
+
 
 
     /**
@@ -1002,6 +1578,89 @@ public class Controller {
      **/
     public boolean tlu(double w_vec[], double s_vec[], double f)
     {
-        return (false);
+        // Sécurité : mêmes tailles, pas de null
+        if (w_vec == null || s_vec == null || w_vec.length != s_vec.length) {
+            // Ici on peut décider de renvoyer false ou de throw une exception.
+            // Pour un projet étudiant, un false + message est souvent suffisant.
+            System.err.println("TLU error: weight and sensor vectors must be non-null and of same length.");
+            return false;
+        }
+
+        double sum = 0.0;
+
+        // Somme pondérée Σ w_i * s_i
+        for (int i = 0; i < w_vec.length; i++) {
+            sum += w_vec[i] * s_vec[i];
+        }
+
+        // Activation si sum > f (comme dans l’énoncé)
+        return (sum > f);
     }
+
+    // Clamp simple dans [0,1]
+    private double clamp01(double x) {
+        if (x < 0.0) return 0.0;
+        if (x > 1.0) return 1.0;
+        return x;
+    }
+
+    // Affiche un message seulement si le comportement a changé
+    private void logBehaviorChangeIfNeeded(int newBehavior) {
+        if (newBehavior == currentBehavior) {
+            return; // pas de changement, pas de log
+        }
+
+        String oldName;
+        switch (currentBehavior) {
+            case BEH_AVOID:  oldName = "AVOID";  break;
+            case BEH_TRACK:  oldName = "TRACK";  break;
+            case BEH_CLEAN:  oldName = "CLEAN";  break;
+            case BEH_WANDER: oldName = "WANDER"; break;
+            default:         oldName = "NONE";   break;
+        }
+
+        String newName;
+        switch (newBehavior) {
+            case BEH_AVOID:  newName = "AVOID";  break;
+            case BEH_TRACK:  newName = "TRACK";  break;
+            case BEH_CLEAN:  newName = "CLEAN";  break;
+            case BEH_WANDER: newName = "WANDER"; break;
+            default:         newName = "NONE";   break;
+        }
+
+        System.out.println("[AUTO] Comportement " + oldName + " -> " + newName);
+        currentBehavior = newBehavior;
+    }
+
+    // Retourne true si le robot bouge très peu depuis plusieurs secondes
+    private boolean isStuck() {
+        long now = System.currentTimeMillis();
+
+        // On ne teste qu'environ une fois par seconde
+        if (now - lastStuckCheckTimeMs < 1000) {
+            return false;
+        }
+
+        double x = getGPSX();
+        double y = getGPSY();
+
+        double dx = x - lastStuckCheckX;
+        double dy = y - lastStuckCheckY;
+        double dist = Math.sqrt(dx * dx + dy * dy);
+
+        lastStuckCheckTimeMs = now;
+        lastStuckCheckX = x;
+        lastStuckCheckY = y;
+
+        // Si on s’est déplacé de moins de 5 cm depuis la dernière seconde
+        if (dist < 0.05) {
+            stuckCounter++;
+        } else {
+            stuckCounter = 0;
+        }
+
+        // Considérer “bloqué” après 5 secondes sans vraiment bouger
+        return (stuckCounter >= 5);
+    }
+
 }
