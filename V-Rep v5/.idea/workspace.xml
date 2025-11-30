@@ -4,10 +4,15 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="30d387d6-7216-4fff-8f4f-e25f5e1dbb23" name="Default Changelist" comment="">
+    <list default="true" id="30d387d6-7216-4fff-8f4f-e25f5e1dbb23" name="Default Changelist" comment="Tracking stable dans pièce vide">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/out/production/V-Rep v5/main/Controller$1$1.class" beforeDir="false" afterPath="$PROJECT_DIR$/out/production/V-Rep v5/main/Controller$1$1.class" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/out/production/V-Rep v5/main/Controller$1.class" beforeDir="false" afterPath="$PROJECT_DIR$/out/production/V-Rep v5/main/Controller$1.class" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/out/production/V-Rep v5/main/Controller$2.class" beforeDir="false" afterPath="$PROJECT_DIR$/out/production/V-Rep v5/main/Controller$2.class" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/out/production/V-Rep v5/main/Controller.class" beforeDir="false" afterPath="$PROJECT_DIR$/out/production/V-Rep v5/main/Controller.class" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/out/production/V-Rep v5/main/GUI.fxml" beforeDir="false" afterPath="$PROJECT_DIR$/out/production/V-Rep v5/main/GUI.fxml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/main/Controller.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/Controller.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/GUI.fxml" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/GUI.fxml" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -229,6 +234,15 @@
       <option name="presentableId" value="Default" />
       <updated>1636969068315</updated>
     </task>
+    <task id="LOCAL-00001" summary="Tracking stable dans pièce vide">
+      <option name="closed" value="true" />
+      <created>1764526242675</created>
+      <option name="number" value="00001" />
+      <option name="presentableId" value="LOCAL-00001" />
+      <option name="project" value="LOCAL" />
+      <updated>1764526242675</updated>
+    </task>
+    <option name="localTasksCounter" value="2" />
     <servers />
   </component>
   <component name="ToolWindowManager">
@@ -263,6 +277,10 @@
       <window_info anchor="right" id="Maven Projects" order="7" />
       <window_info anchor="right" id="Coverage" order="8" side_tool="true" weight="0.32992172" />
     </layout>
+  </component>
+  <component name="VcsManagerConfiguration">
+    <MESSAGE value="Tracking stable dans pièce vide" />
+    <option name="LAST_COMMIT_MESSAGE" value="Tracking stable dans pièce vide" />
   </component>
   <component name="editorHistoryManager">
     <entry file="file://$PROJECT_DIR$/src/main/Behavior.java" />

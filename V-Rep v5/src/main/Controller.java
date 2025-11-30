@@ -705,6 +705,7 @@ public class Controller {
         update.start();
         main.start();
         updateModeUI();
+        updateTrackOverrideUI();
     }
 
     /**
@@ -813,6 +814,29 @@ public class Controller {
 //    private FSM clean  = new Clean( 50, 3);
 //    private FSM wander = new Wander(3, 25);
 
+    // --- Waypoints pour la phase 1 du Track (GPS uniquement) ---
+    // À REMPLACER par tes vraies coordonnées (en mètres, dans le repère du GPS Coppelia)
+    private static final double[][] TRACK_WAYPOINTS = {
+            // { x, y }
+            { 1.0, 1.0 },
+            { 2.0, 1.0 },
+            { 3.0, 1.0 }  // dernier waypoint proche de la zone dock
+    };
+
+    private static final double WP_REACHED_DIST = 0.25; // rayon pour considérer un WP atteint
+
+    private int    trackCurrentWp        = 0;
+    private double trackLastDistToTarget = Double.MAX_VALUE;
+
+
+    // --- État Track phase 1 (retour GPS) ---
+    private double  trackLastDistToDock  = Double.MAX_VALUE;
+
+
+    // Compteur pour détecter quand Avoid est lui-même coincé
+    private int avoidStuckCounter = 0;
+
+
     // Indique si on est actuellement en phase 2 du track (approche dock)
     private boolean inTrackPhase2 = false;
 
@@ -832,14 +856,6 @@ public class Controller {
     private static final double WHEEL_BASE   = 0.27;  // ~27 cm entre les roues
 
 
-    // --- État Track phase 1 (retour GPS) ---
-    private boolean trackPhase1Init      = false;
-    private double  trackLastDistToDock  = Double.MAX_VALUE;
-    private boolean trackTurnRight       = true; // alterne gauche/droite quand on doit se réorienter
-
-    private boolean trackJustTurned      = false;
-
-
     // --- Position de la station de charge (dock) ---
     private boolean dockPositionInitialized = false;
     private double dockX = CHARGER_XCOORD;  // valeur de secours
@@ -856,6 +872,15 @@ public class Controller {
 
     // Pour vérifier que la pose de docking reste bonne sur une courte durée
     private long dockStableSinceMs = 0;
+
+    // Détection de blocage spécifique à la phase 2 du Track (caméra)
+    private long trackP2StuckSinceMs = 0;
+    private long trackP2LastSpinMs   = 0;
+
+    // Pour savoir si on a déjà fait le scan initial en phase 2
+    private boolean trackP2InitialScanDone = false;
+
+
 
 
 
@@ -916,12 +941,25 @@ public class Controller {
 
     @FXML private Button btnMode; // si déjà déclaré ailleurs, supprime cette ligne
 
+    @FXML private Button btnForceTrack;
+    // Forçage manuel du comportement TRACK (via un bouton GUI)
+    private boolean trackOverride = false;
+
+
     // Met à jour le libellé du bouton selon le mode courant
     private void updateModeUI() {
         if (btnMode == null) return;
         String label = (mode == MODE_AUTO) ? "Mode: AUTO" : "Mode: MANU";
         btnMode.setText(label);
     }
+
+    // Met à jour le libellé du bouton TRACK forcé
+    private void updateTrackOverrideUI() {
+        if (btnForceTrack == null) return;
+        String label = trackOverride ? "TRACK forcé: ON" : "TRACK forcé: OFF";
+        btnForceTrack.setText(label);
+    }
+
 
     @FXML
     private void toggleMode() {
@@ -934,6 +972,20 @@ public class Controller {
         }
         updateModeUI();
     }
+
+    @FXML
+    private void toggleTrackOverride() {
+        trackOverride = !trackOverride;
+
+        if (trackOverride) {
+            System.out.println("[DEBUG] TRACK forcé activé (le TLU Track est ignoré).");
+        } else {
+            System.out.println("[DEBUG] TRACK forcé désactivé (retour au TLU normal).");
+        }
+
+        updateTrackOverrideUI();
+    }
+
 
     // Retourne true quand la phase de démarrage est terminée
     private boolean startupStep() {
@@ -1110,11 +1162,11 @@ public class Controller {
         }
 
         // Override dev : batterie plus courte (ex: 2 minutes)
-        if (!batteryDevOverrideDone) {
-            setBatteryTime(2);  // 2 minutes au lieu de 20
-            batteryDevOverrideDone = true;
-            System.out.println("[BATT] Override dev: batterie réglée sur 2 minutes.");
-        }
+//        if (!batteryDevOverrideDone) {
+//            setBatteryTime(2);  // 2 minutes au lieu de 20
+//            batteryDevOverrideDone = true;
+//            System.out.println("[BATT] Override dev: batterie réglée sur 2 minutes.");
+//        }
 
         Integer priority[] = new Integer[2];
         //        int priority[] = new int[4];
@@ -1197,22 +1249,37 @@ public class Controller {
 
         // ---------- Normalisation des capteurs dans [0,1] ----------
 
+        // Batterie
         double batNorm = clamp01(Utils.map(bat, 0.0, (double) MAX_BATT_VOLT, 0.0, 1.0));
-        double batLow  = 1.0 - batNorm;
+        double batLow  = 1.0 - batNorm; // 0 = batterie pleine, 1 = batterie très faible
 
-        double snrClamped = clamp01(snr);
-        double snrClose   = 1.0 - snrClamped;
-
+        // GPS : distance au dock -> "near"
         double gpsClamped = Math.min(gps, MAX_GPS_DIST);
         double gpsNear    = 1.0 - (gpsClamped / MAX_GPS_DIST);
         gpsNear = clamp01(gpsNear);
 
+        // Caméra : score [-1,1] -> [0,1]
         double camNorm = clamp01((cam + 1.0) / 2.0);
 
+        // ---------- Sonars pour Avoid : on ne regarde que les frontaux (2 et 3) ----------
+
+        double[] ranges = getSonarRanges();
+        double s2 = ranges[2]; // avant-gauche
+        double s3 = ranges[3]; // avant-droite
+
+        // distance la plus proche DEVANT
+        double snrFront   = Math.min(s2, s3);
+        double snrClamped = clamp01(snrFront);
+        double snrClose   = 1.0 - snrClamped;   // 0 = loin, 1 = très proche
+
         // ---------- TLU Avoid ----------
+        // On veut que Avoid s'active quand un obstacle est à moins de ~0.45 m devant
+        // THRESH_FRONT = 0.45 dans avoid()
+        // snrClose = 1 - snrFront > fAvoid  <=>  snrFront < 1 - fAvoid
+        // Pour snrFront < 0.45, on prend fAvoid ≈ 1 - 0.45 = 0.55
         double[] sAvoid = { snrClose };
         double[] wAvoid = { 1.0 };
-        double fAvoid   = 0.6;
+        double   fAvoid = 0.55;
 
         boolean avoidActive = tlu(wAvoid, sAvoid, fAvoid);
 
@@ -1223,12 +1290,16 @@ public class Controller {
         double[] sTrack = { batLow };
         double[] wTrack = { 1.0 };
 
-        // Seuil : par ex. 0.8 → Track s'active quand batLow > 0.8,
-        // c'est-à-dire quand la batterie est vraiment faible (~≤ 20 %)
+        // Avec fTrack = 0.2 :
+        // Track s'active quand batLow > 0.2, c.-à-d. quand la batterie est <~ 80 %
         double fTrack = 0.2;
 
         boolean trackActive = tlu(wTrack, sTrack, fTrack);
 
+        // Si le bouton "TRACK forcé" est activé, on force trackActive à true
+        if (trackOverride) {
+            trackActive = true;
+        }
 
         // ---------- Clean & Wander ----------
         // Clean = comportement de fond ; Wander = si bloqué
@@ -1253,7 +1324,6 @@ public class Controller {
         else {
             newBehavior = BEH_WANDER;
         }
-
 
         // Log si changement
         logBehaviorChangeIfNeeded(newBehavior);
@@ -1280,18 +1350,16 @@ public class Controller {
     }
 
 
-    // Comportement Track : retour vers le dock + approche fine avec la caméra
+
     public void track()
     {
-        // Si on a déjà considéré que le robot est docké, on ne bouge plus
         if (trackDocked) {
             setVel(0, 0);
             dir = 's';
-            inTrackPhase2 = false;   // plus en phase 2
+            inTrackPhase2 = false;
             return;
         }
 
-        // Sécurité : si la position du dock n'est pas encore initialisée
         if (!dockPositionInitialized) {
             System.out.println("[TRACK] Dock non initialisé, fallback: avance lente.");
             inTrackPhase2 = false;
@@ -1299,98 +1367,220 @@ public class Controller {
             return;
         }
 
-        // Distance au dock (position enregistrée au démarrage)
-        double distToDock = Utils.getEuclidean(
-                getGPSX(), getGPSY(),
-                dockX,     dockY
-        );
-
-        // Par défaut : on considère qu'on n'est pas en phase 2
-        inTrackPhase2 = false;
-
-        // PHASE 1 : loin du dock -> on utilise le GPS + odométrie pour revenir vers la zone
-        if (distToDock > TRACK_NEAR_DIST) {
-            trackReturnToDock(distToDock);
-        }
-        // PHASE 2 : proche du dock -> on utilise la caméra pour s'aligner et se poser
-        else {
-            inTrackPhase2 = true; // <<< important : on signale qu'on est en Phase 2
-            trackDockingApproach(distToDock);
-        }
-    }
-    // Phase 1 du Track : retour vers la zone du dock en s'orientant grâce aux encodeurs
-    private void trackReturnToDock(double distToDock)
-    {
-        // Position actuelle (monde) via GPS
         double x = getGPSX();
         double y = getGPSY();
 
-        // Vecteur vers le dock
-        double dx = dockX - x;
-        double dy = dockY - y;
+        double distToDock = Utils.getEuclidean(x, y, dockX, dockY);
 
-        // Angle absolu dans le monde vers le dock
-        double targetAngle = Math.atan2(dy, dx);
+        boolean wasInPhase2 = inTrackPhase2;
 
-        // Orientation estimée du robot via odométrie
-        double yaw = odoTheta;
+        // PHASE 1 : loin du dock -> navigation par waypoints GPS
+        if (distToDock > TRACK_NEAR_DIST) {
+            inTrackPhase2 = false;
+            trackReturnToDockWithWaypoints(x, y, distToDock);
+        }
+        // PHASE 2 : proche du dock -> caméra
+        else {
+            inTrackPhase2 = true;
 
-        // Différence d'angle à corriger
-        double diff = normalizeAngle(targetAngle - yaw);
-
-        System.out.println(String.format(
-                "[TRACK] Phase 1: dist=%.2f m, yaw=%.2f rad, target=%.2f rad, diff=%.2f rad",
-                distToDock, yaw, targetAngle, diff
-        ));
-
-        // Tolérance : si |diff| < 10°, on considère qu'on est à peu près aligné
-        double ANGLE_TOL = Math.toRadians(10.0);
-
-        if (Math.abs(diff) > ANGLE_TOL) {
-            // On doit tourner pour s'aligner vers le dock
-            float turnVel  = vel / 3.0f;
-            int   turnTime = 200; // ms
-
-            if (diff > 0) {
-                // Dock "à gauche" de la direction actuelle -> tourne à gauche
-                System.out.println("[TRACK] Phase 1: dock à gauche -> rotation gauche.");
-                turnSpot(-turnVel, turnTime);
-            } else {
-                // Dock "à droite" -> tourne à droite
-                System.out.println("[TRACK] Phase 1: dock à droite -> rotation droite.");
-                turnSpot(turnVel, turnTime);
+            if (!wasInPhase2) {
+                System.out.println("[TRACK] Passage en phase 2 (caméra).");
+                trackLastDistToTarget   = Double.MAX_VALUE;
+                trackP2InitialScanDone  = false;
+                dockStableSinceMs       = 0;
+                trackP2StuckSinceMs     = 0L;
             }
-        } else {
-            // Assez aligné -> on avance vers le dock
-            System.out.println("[TRACK] Phase 1: aligné -> avance vers le dock.");
-            move(vel * 0.8f, 250);
+
+            trackDockingApproach(distToDock);
         }
     }
+
+
+    /// Phase 1 du Track : navigation par waypoints en utilisant UNIQUEMENT le GPS.
+// Objectif : faire baisser la distance au "target" (waypoint courant ou dock).
+    private void trackReturnToDockWithWaypoints(double x, double y, double distToDock)
+    {
+        // 0) Si bloqué → on laisse Wander se débrouiller, Track reprendra après
+        if (isStuck()) {
+            System.out.println("[TRACK] Phase 1: robot détecté comme bloqué -> Wander d'évasion.");
+            wander();
+            return;
+        }
+
+        // 1) Déterminer la cible actuelle : waypoint ou dock
+        double targetX, targetY;
+
+        // Si on a encore des waypoints à visiter
+        if (trackCurrentWp < TRACK_WAYPOINTS.length) {
+
+            double wpX = TRACK_WAYPOINTS[trackCurrentWp][0];
+            double wpY = TRACK_WAYPOINTS[trackCurrentWp][1];
+
+            double distToWp = Utils.getEuclidean(x, y, wpX, wpY);
+
+            // Si on est proche du waypoint courant -> passer au suivant
+            if (distToWp < WP_REACHED_DIST) {
+                System.out.println("[TRACK] Phase 1: waypoint " + trackCurrentWp + " atteint.");
+                trackCurrentWp++;
+                // recalcul rapide si on a dépassé le dernier
+                if (trackCurrentWp >= TRACK_WAYPOINTS.length) {
+                    System.out.println("[TRACK] Phase 1: tous les waypoints atteints, cible = dock.");
+                }
+            }
+        }
+
+        if (trackCurrentWp < TRACK_WAYPOINTS.length) {
+            targetX = TRACK_WAYPOINTS[trackCurrentWp][0];
+            targetY = TRACK_WAYPOINTS[trackCurrentWp][1];
+        } else {
+            // plus de waypoint -> on vise directement le dock
+            targetX = dockX;
+            targetY = dockY;
+        }
+
+        double distToTarget = Utils.getEuclidean(x, y, targetX, targetY);
+
+        // 2) Gradient GPS simple : on regarde si la distance au target baisse ou monte
+        final double EPS_GOOD = 0.02; // 2 cm d'amélioration -> bon
+        final double EPS_BAD  = 0.01; // 1 cm de dégradation -> mauvais
+
+        if (trackLastDistToTarget == Double.MAX_VALUE) {
+            // Première fois : on initialise et on fait un petit pas
+            trackLastDistToTarget = distToTarget;
+            System.out.println("[TRACK] Phase 1: init vers target (" +
+                    String.format("%.2f", targetX) + "," + String.format("%.2f", targetY) +
+                    "), petit pas en avant.");
+            move(vel * 0.7f, 200);
+            return;
+        }
+
+        if (distToTarget < trackLastDistToTarget - EPS_GOOD) {
+            // On se rapproche bien de la cible -> continue tout droit
+            System.out.println(String.format(
+                    "[TRACK] Phase 1: dist target %.2f -> %.2f m, bonne direction -> avance.",
+                    trackLastDistToTarget, distToTarget
+            ));
+            trackLastDistToTarget = distToTarget;
+            move(vel * 0.8f, 220);
+            return;
+        }
+
+        if (distToTarget > trackLastDistToTarget + EPS_BAD) {
+            // On s'éloigne de la cible -> tourner un peu et réessayer
+            System.out.println(String.format(
+                    "[TRACK] Phase 1: dist target %.2f -> %.2f m, mauvaise direction -> rotation.",
+                    trackLastDistToTarget, distToTarget
+            ));
+
+            trackLastDistToTarget = distToTarget;
+
+            float turnVel  = vel / 3.0f;
+            int   turnTime = 350;
+
+            // tourner dans un sens aléatoire pour explorer
+            if (Math.random() < 0.5) {
+                System.out.println("[TRACK] Phase 1: rotation à droite.");
+                turnSpot(turnVel, turnTime);
+            } else {
+                System.out.println("[TRACK] Phase 1: rotation à gauche.");
+                turnSpot(-turnVel, turnTime);
+            }
+            return;
+        }
+
+        // Variation faible -> probablement du bruit GPS -> petit pas en avant
+        System.out.println(String.format(
+                "[TRACK] Phase 1: dist target change peu (%.2f -> %.2f m) -> avance doucement.",
+                trackLastDistToTarget, distToTarget
+        ));
+        trackLastDistToTarget = distToTarget;
+        move(vel * 0.7f, 200);
+    }
+
+
+
+
     // Phase 2 du Track : caméra uniquement, pour orientation + petits pas vers le dock
     private void trackDockingApproach(double distToDock)
     {
-        System.out.println("[TRACK] Phase 2: approche caméra (dist ≈ "
-                + String.format("%.2f", distToDock) + " m)");
-
         double score   = getTargetMaxScore();
         int    imgW    = getImageWidth();
         int    targetX = getTargetX();
         int    centerX = imgW / 2;
         int    dx      = targetX - centerX;
 
-        // Seuils de qualité de détection du marqueur
-        final double SCORE_MIN_SEARCH = 0.25; // "je vois quelque chose"
-        final double SCORE_MIN_DOCK   = 0.42;  // score exigé pour valider le dock
-
-        // Bande morte "orientation" (phase d'approche) : tant qu'on n'est pas dans cette zone, on NE FAIT QUE TOURNER
-        int deadBandOrient = imgW / 10;   // ±10% de la largeur
-
-        // Bande morte "dock" : assez centré pour la condition finale (un peu plus large qu'avant)
-        int deadBandDock   = imgW / 14;   // au lieu de /30 ou /18
-
         long now = System.currentTimeMillis();
 
-        // 1) Si le marqueur est quasi invisible -> recherche en rotation, ne pas avancer
+        System.out.println("[TRACK] Phase 2: approche caméra (dist ≈ "
+                + String.format("%.2f", distToDock) + " m)");
+        System.out.println("[TRACK] (score=" + String.format("%.2f", score)+ ")");
+
+        // Seuils de qualité de détection du marqueur
+        final double SCORE_MIN_SEARCH = 0.25; // "je vois quelque chose"
+        final double SCORE_MIN_DOCK   = 0.42; // score exigé pour valider le dock
+
+        // --- Scan initial : dès l'entrée en phase 2, on peut faire un tour pour chercher le marqueur ---
+        if (!trackP2InitialScanDone) {
+
+            // Si on voit déjà le marqueur correctement, pas besoin de spin
+            if (score >= SCORE_MIN_SEARCH) {
+                System.out.println("[TRACK] P2: marqueur déjà visible, pas de scan initial.");
+                trackP2InitialScanDone = true;
+            } else {
+                System.out.println("[TRACK] P2: entrée en phase 2 -> scan initial à 360° pour trouver le marqueur.");
+                float spinVel  = vel / 3.0f;
+                int   spinTime = 1400;  // ~360°, ajuste si besoin
+
+                turnSpot(spinVel, spinTime);
+
+                // On mémorise qu'on a fait le scan, et on réinitialise la stabilisation
+                trackP2InitialScanDone = true;
+                dockStableSinceMs      = 0;
+                trackP2LastSpinMs      = now;  // évite un spin "bloqué" juste après
+
+                // On laisse la prochaine itération de trackDockingApproach analyser la situation
+                return;
+            }
+        }
+
+        // --- Gestion du cas "bloqué en droite-gauche" près du dock (inchangée) ---
+
+        final long P2_SPIN_STUCK_MS    = 10_000L; // 10 s bloqué
+        final long P2_SPIN_INTERVAL_MS = 10_000L; // 10 s
+
+        if (!trackDocked && isStuck()) {
+            if (trackP2StuckSinceMs == 0L) {
+                // On vient de détecter qu'on est bloqué
+                trackP2StuckSinceMs = now;
+            }
+
+            long stuckDuration = now - trackP2StuckSinceMs;
+            long sinceLastSpin = now - trackP2LastSpinMs;
+
+            if (stuckDuration > P2_SPIN_STUCK_MS && sinceLastSpin > P2_SPIN_INTERVAL_MS) {
+                System.out.println("[TRACK] P2: bloqué près du dock, rotation complète pour retrouver le marqueur.");
+                float spinVel  = vel / 3.0f;
+                int   spinTime = 1400;  // ms, à ajuster si besoin
+
+                turnSpot(spinVel, spinTime);
+
+                dockStableSinceMs = 0;
+                trackP2LastSpinMs = now;
+                return;
+            }
+        } else {
+            trackP2StuckSinceMs = 0L;
+        }
+
+        // --- le reste de ta fonction (deadBandOrient, deadBandDock, stabilisation...) reste inchangé ---
+
+        // Bande morte "orientation" (phase d'approche)
+        int deadBandOrient = imgW / 10;   // ±10% de la largeur
+
+        // Bande morte "dock" : assez centré pour la condition finale
+        int deadBandDock   = imgW / 14;
+
+        // 1) Si le marqueur est quasi invisible -> rotation de recherche
         if (score < SCORE_MIN_SEARCH) {
             dockStableSinceMs = 0;
             System.out.println("[TRACK] P2: marqueur non vu (score="
@@ -1400,10 +1590,8 @@ public class Controller {
             return;
         }
 
-        // 2) Si on est encore PLUS LOIN que la distance cible de dock (0.20 m) :
-        //    on fait ORIENTATION PUIS petit pas en avant
+        // 2) Si on est encore plus loin que la distance cible...
         if (distToDock > TRACK_DOCKED_DIST) {
-            // 2A) Tant que le marqueur est nettement décalé -> rotation ONLY
             if (Math.abs(dx) > deadBandOrient) {
                 dockStableSinceMs = 0;
                 float turnVel  = vel / 3.0f;
@@ -1419,37 +1607,28 @@ public class Controller {
                 return;
             }
 
-            // 2B) Ici : le marqueur est à peu près centré -> petit pas en avant
             dockStableSinceMs = 0;
             System.out.println("[TRACK] P2: marqueur centré -> petit pas vers le dock.");
             move(vel * 0.5f, 200);
             return;
         }
 
-        // 3) Zone de docking : distToDock <= TRACK_DOCKED_DIST (~0.20 m)
-        //    On vérifie centrage + score, puis stabilité
-
+        // 3) Zone de docking: distToDock <= TRACK_DOCKED_DIST
         boolean centeredFine = Math.abs(dx) < deadBandDock;
         boolean goodScore    = score >= SCORE_MIN_DOCK;
 
-        // Si la pose n'est pas encore bonne ET qu'on n'a pas commencé la stabilisation,
-        // on autorise encore de petites rotations. Mais si la stabilisation est en cours,
-        // on ne tourne PLUS (pour éviter les gauche/droite infinies).
         if ((!centeredFine || !goodScore) && dockStableSinceMs == 0) {
-            float turnVel  = vel / 4.0f;  // plus doux pour éviter des grands zigzags
+            float turnVel  = vel / 4.0f;
             int   turnTime = 120;
 
             if (!centeredFine) {
                 System.out.println("[TRACK] P2 (dock): recadrage fin (dx=" + dx + ").");
                 if (dx > 0) {
-                    // marqueur à droite -> rotation droite
                     turnSpot(turnVel, turnTime);
                 } else {
-                    // marqueur à gauche -> rotation gauche
                     turnSpot(-turnVel, turnTime);
                 }
             } else {
-                // Centré mais score un peu faible -> micro rotation de "recherche"
                 System.out.println("[TRACK] P2 (dock): score faible ("
                         + String.format("%.2f", score)
                         + "), micro rotation.");
@@ -1458,18 +1637,14 @@ public class Controller {
             return;
         }
 
-        // 4) Ici : soit
-        //    - pose vraiment bonne (centeredFine && goodScore),
-        //    - soit on est en phase de stabilisation (dockStableSinceMs > 0) et on ne veut plus tourner.
         if (dockStableSinceMs == 0) {
-            // On vient d'entrer dans une pose "assez bonne" pour commencer la stabilisation
             dockStableSinceMs = now;
             System.out.println("[TRACK] P2: pose dock bonne (dist ≤ 0.20, centré & score OK), on vérifie la stabilité...");
             setVel(0, 0);
             return;
         } else {
             long dt = now - dockStableSinceMs;
-            if (dt > 600) { // ~0,6 s de pose stable
+            if (dt > 600) {
                 System.out.println("[TRACK] P2: Dock final validé. Arrêt.");
                 setVel(0, 0);
                 dir = 's';
@@ -1486,45 +1661,105 @@ public class Controller {
 
 
 
-
-
-
-
-
-
-
-
-
-
     public void avoid()
     {
-        // Si on est en phase 2 du docking, on ne fait PAS d'évitement classique
-        if (inTrackPhase2) {
-            // Option : tu peux laisser un hard-stop d'urgence ici si les sonars sont < 0.05 m, sinon rien
-            // Exemple ultra simple :
-            double minSonar = Arrays.stream(new double[]{
-                    getSonarRange(0), getSonarRange(1), getSonarRange(2),
-                    getSonarRange(3), getSonarRange(4), getSonarRange(5)
-            }).min().orElse(1.0);
-
-            if (minSonar < 0.05) {
-                // Vraiment collé à un obstacle, on stoppe net:
-                setVel(0, 0);
-            }
+        // Si tu as ce flag pour la phase 2 du docking, on le garde :
+        if (trackDocked) {
+            // Une fois docké, plus d'avoid
+            setVel(0, 0);
             return;
         }
 
-        // ... ton code avoid normal ensuite ...
-        double leftMinSonarRadius  = Arrays.stream(new double[]{getSonarRange(0), getSonarRange(1), getSonarRange(2)}).min().getAsDouble();
-        double rightMinSonarRadius = Arrays.stream(new double[]{getSonarRange(3), getSonarRange(4), getSonarRange(5)}).min().getAsDouble();
+        // (Optionnel) Si tu as inTrackPhase2 :
+        // Pendant le docking caméra, on laisse Track gérer l'approche
+        // if (inTrackPhase2) return;
 
-        if(leftMinSonarRadius < rightMinSonarRadius)
-        {
-            turnSpot(vel/2, 1000);
+        // 1) Lecture de tous les sonars
+        double s0 = getSonarRange(0); // gauche latéral
+        double s1 = getSonarRange(1); // gauche diagonal
+        double s2 = getSonarRange(2); // avant-gauche
+        double s3 = getSonarRange(3); // avant-droite
+        double s4 = getSonarRange(4); // droite diagonal
+        double s5 = getSonarRange(5); // droite latéral
+
+        // "Vraiment devant" : uniquement les deux capteurs quasi frontaux
+        double frontMin = Math.min(s2, s3);
+
+        // Pour choisir gauche/droite, on regarde les cônes "avant" (1,2) et (3,4)
+        double leftFront  = Math.min(s1, s2); // gauche devant
+        double rightFront = Math.min(s3, s4); // droite devant
+
+        // Pour détecter un piège très proche, on regarde TOUT
+        double globalMin = Math.min(
+                Math.min(Math.min(s0, s1), Math.min(s2, s3)),
+                Math.min(s4, s5)
+        );
+
+        // Seuil "il y a vraiment quelque chose devant"
+        final double THRESH_FRONT = 0.45; // m
+        // Seuil "je suis collé à un truc" → piège possible
+        final double THRESH_TRAP  = 0.18; // m
+
+        // 2) Si rien de vraiment proche devant ET pas de piège global, on ne fait rien
+        //    -> permet de longer un mur sur le côté sans déclencher avoid
+        if (frontMin > THRESH_FRONT && globalMin > THRESH_TRAP) {
+            avoidStuckCounter = 0;
+            return;
         }
-        else if(leftMinSonarRadius > rightMinSonarRadius)
-        {
-            turnSpot(-vel/2, 1000);
+
+        // 3) Détection d'un avoid qui tourne en rond / ne fait plus avancer le robot
+        //    -> on utilise isStuck() qui regarde le GPS sur plusieurs secondes
+        if (isStuck()) {
+            avoidStuckCounter++;
+        } else {
+            avoidStuckCounter = 0;
+        }
+
+        // 4) Cas "piège" : très proche quelque part + coincé depuis un moment
+        if (avoidStuckCounter >= 2 && globalMin < THRESH_TRAP) {
+            System.out.println("[AVOID] Coincé près d'un obstacle -> manœuvre d'évasion.");
+
+            // gros recul
+            move(-vel * 0.7f, 600);
+
+            // grande rotation aléatoire
+            if (Math.random() < 0.5) {
+                turnSpot(vel * 0.7f, 800);
+            } else {
+                turnSpot(-vel * 0.7f, 800);
+            }
+
+            avoidStuckCounter = 0;
+            return;
+        }
+
+
+        // 5) Cas normal : obstacle vraiment devant, mais pas encore considéré “piégé”
+        if (frontMin <= THRESH_FRONT) {
+            System.out.println("[AVOID] Obstacle devant -> recul + rotation côté dégagé.");
+
+            // petit recul pour se décoller du mur/meuble
+            move(-vel * 0.5f, 250);
+
+            // Choix du côté de rotation :
+            //  diff > 0 => rightFront > leftFront => plus d'espace à droite
+            double diff = rightFront - leftFront;
+
+            // Si les deux côtés sont similaires, on choisit un côté au hasard
+            if (Math.abs(diff) < 0.05) {
+                diff = (Math.random() < 0.5) ? 1.0 : -1.0;
+            }
+
+            float turnVel  = vel / 2.0f;
+            int   turnTime = 300;
+
+            if (diff > 0) {
+                // plus d'espace à droite -> tourne à droite
+                turnSpot(turnVel, turnTime);
+            } else {
+                // plus d'espace à gauche -> tourne à gauche
+                turnSpot(-turnVel, turnTime);
+            }
         }
     }
 

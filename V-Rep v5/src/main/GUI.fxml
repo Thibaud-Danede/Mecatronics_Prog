@@ -45,6 +45,16 @@
                         <Insets right="-60.0"/>
                      </GridPane.margin>
             </Button>
+            <Button fx:id="btnForceTrack"
+                        text="Mode: TRACK"
+                        mnemonicParsing="false"
+                        onAction="#toggleTrackOverride"
+                        GridPane.columnIndex="0" GridPane.rowIndex="0"
+                        GridPane.halignment="RIGHT" GridPane.valignment="CENTER">
+                     <GridPane.margin>
+                        <Insets top ="60" right="-62.0"/>
+                     </GridPane.margin>
+            </Button>
             <Label text="GPS" GridPane.halignment="CENTER" GridPane.rowIndex="2" GridPane.valignment="CENTER">
                <font>
                   <Font name="System Bold" size="30.0" />
