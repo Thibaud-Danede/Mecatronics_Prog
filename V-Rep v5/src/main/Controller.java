@@ -817,11 +817,9 @@ public class Controller {
     // --- Waypoints pour la phase 1 du Track (GPS uniquement) ---
     // À REMPLACER par tes vraies coordonnées (en mètres, dans le repère du GPS Coppelia)
     private static final double[][] TRACK_WAYPOINTS = {
-            // { x, y }
-            { 1.0, 1.0 },
-            { 2.0, 1.0 },
-            { 3.0, 1.0 }  // dernier waypoint proche de la zone dock
+            { CHARGER_XCOORD, CHARGER_YCOORD }  // un seul waypoint : le dock
     };
+
 
     private static final double WP_REACHED_DIST = 0.25; // rayon pour considérer un WP atteint
 
@@ -857,7 +855,7 @@ public class Controller {
 
 
     // --- Position de la station de charge (dock) ---
-    private boolean dockPositionInitialized = false;
+    private boolean dockPositionInitialized = true;
     private double dockX = CHARGER_XCOORD;  // valeur de secours
     private double dockY = CHARGER_YCOORD;  // valeur de secours
 
@@ -1149,17 +1147,14 @@ public class Controller {
 
         // 1) Initialiser la position de docking une seule fois au début
         if (!dockPositionInitialized) {
-            double x = getGPSX();
-            double y = getGPSY();
+            // On connaît déjà la position fixe du dock dans la scène
+            dockX = CHARGER_XCOORD;   // 1.78
+            dockY = CHARGER_YCOORD;   // -0.78
+            dockPositionInitialized = true;
 
-            // Évite de prendre (0,0) avant la première vraie lecture GPS
-            if (Math.abs(x) > 1e-3 || Math.abs(y) > 1e-3) {
-                dockX = x;
-                dockY = y;
-                dockPositionInitialized = true;
-                System.out.println("[DOCK] Position de la station enregistrée: X=" + dockX + "  Y=" + dockY);
-            }
+            System.out.println("[DOCK] Position fixe de la station: X=" + dockX + "  Y=" + dockY);
         }
+
 
         // Override dev : batterie plus courte (ex: 2 minutes)
 //        if (!batteryDevOverrideDone) {
@@ -1369,6 +1364,11 @@ public class Controller {
 
         double x = getGPSX();
         double y = getGPSY();
+        System.out.println(String.format(
+                "[DEBUG TRACK] GPS=(%.2f, %.2f) dock=(%.2f, %.2f) dist=%.2f",
+                x, y, dockX, dockY, Utils.getEuclidean(x, y, dockX, dockY)
+        ));
+
 
         double distToDock = Utils.getEuclidean(x, y, dockX, dockY);
 
@@ -1396,106 +1396,77 @@ public class Controller {
     }
 
 
-    /// Phase 1 du Track : navigation par waypoints en utilisant UNIQUEMENT le GPS.
-// Objectif : faire baisser la distance au "target" (waypoint courant ou dock).
+    /// Phase 1 du Track : retour vers le dock en utilisant UNIQUEMENT le GPS.
+    /// On ignore les waypoints : la cible est toujours (dockX, dockY).
     private void trackReturnToDockWithWaypoints(double x, double y, double distToDock)
     {
-        // 0) Si bloqué → on laisse Wander se débrouiller, Track reprendra après
+        // 0) Si le robot est considéré comme bloqué, on laisse Wander essayer de le débloquer.
         if (isStuck()) {
-            System.out.println("[TRACK] Phase 1: robot détecté comme bloqué -> Wander d'évasion.");
+            System.out.println("[TRACK P1] Robot bloqué -> appel Wander.");
             wander();
             return;
         }
 
-        // 1) Déterminer la cible actuelle : waypoint ou dock
-        double targetX, targetY;
+        // 1) Cible = position du dock
+        double targetX = dockX;
+        double targetY = dockY;
 
-        // Si on a encore des waypoints à visiter
-        if (trackCurrentWp < TRACK_WAYPOINTS.length) {
+        // 2) Vecteur vers le dock
+        double dx = targetX - x;
+        double dy = targetY - y;
+        double distToTarget = Math.sqrt(dx * dx + dy * dy);
 
-            double wpX = TRACK_WAYPOINTS[trackCurrentWp][0];
-            double wpY = TRACK_WAYPOINTS[trackCurrentWp][1];
-
-            double distToWp = Utils.getEuclidean(x, y, wpX, wpY);
-
-            // Si on est proche du waypoint courant -> passer au suivant
-            if (distToWp < WP_REACHED_DIST) {
-                System.out.println("[TRACK] Phase 1: waypoint " + trackCurrentWp + " atteint.");
-                trackCurrentWp++;
-                // recalcul rapide si on a dépassé le dernier
-                if (trackCurrentWp >= TRACK_WAYPOINTS.length) {
-                    System.out.println("[TRACK] Phase 1: tous les waypoints atteints, cible = dock.");
-                }
-            }
-        }
-
-        if (trackCurrentWp < TRACK_WAYPOINTS.length) {
-            targetX = TRACK_WAYPOINTS[trackCurrentWp][0];
-            targetY = TRACK_WAYPOINTS[trackCurrentWp][1];
-        } else {
-            // plus de waypoint -> on vise directement le dock
-            targetX = dockX;
-            targetY = dockY;
-        }
-
-        double distToTarget = Utils.getEuclidean(x, y, targetX, targetY);
-
-        // 2) Gradient GPS simple : on regarde si la distance au target baisse ou monte
-        final double EPS_GOOD = 0.02; // 2 cm d'amélioration -> bon
-        final double EPS_BAD  = 0.01; // 1 cm de dégradation -> mauvais
-
-        if (trackLastDistToTarget == Double.MAX_VALUE) {
-            // Première fois : on initialise et on fait un petit pas
-            trackLastDistToTarget = distToTarget;
-            System.out.println("[TRACK] Phase 1: init vers target (" +
-                    String.format("%.2f", targetX) + "," + String.format("%.2f", targetY) +
-                    "), petit pas en avant.");
-            move(vel * 0.7f, 200);
-            return;
-        }
-
-        if (distToTarget < trackLastDistToTarget - EPS_GOOD) {
-            // On se rapproche bien de la cible -> continue tout droit
+        // Sécurité : si on est déjà "près" (normalement track() passera en phase 2)
+        if (distToTarget < TRACK_NEAR_DIST) {
             System.out.println(String.format(
-                    "[TRACK] Phase 1: dist target %.2f -> %.2f m, bonne direction -> avance.",
-                    trackLastDistToTarget, distToTarget
+                    "[TRACK P1] Déjà proche du dock (%.2f m) -> pas de mouvement (phase 2 va prendre la main).",
+                    distToTarget
             ));
-            trackLastDistToTarget = distToTarget;
-            move(vel * 0.8f, 220);
+            setVel(0, 0);
             return;
         }
 
-        if (distToTarget > trackLastDistToTarget + EPS_BAD) {
-            // On s'éloigne de la cible -> tourner un peu et réessayer
-            System.out.println(String.format(
-                    "[TRACK] Phase 1: dist target %.2f -> %.2f m, mauvaise direction -> rotation.",
-                    trackLastDistToTarget, distToTarget
-            ));
+        // 3) Angle absolu vers le dock
+        double desiredHeading = Math.atan2(dy, dx);  // [-pi, +pi]
 
-            trackLastDistToTarget = distToTarget;
+        // 4) Erreur d'angle entre où on regarde (odoTheta) et où est le dock
+        double headingError = normalizeAngle(desiredHeading - odoTheta);
 
-            float turnVel  = vel / 3.0f;
-            int   turnTime = 350;
+        // 5) Seuils / vitesses
+        final double ANGLE_TOL = Math.toRadians(10.0);  // tolérance de 10°
+        float turnVel  = vel / 2.0f;    // vitesse de rotation
+        int   turnTime = 200;          // durée d'une impulsion de rotation (ms)
+        float fwdVel   = vel * 0.8f;   // vitesse d'avance
+        int   moveTime = 200;          // durée d'une impulsion d'avance (ms)
 
-            // tourner dans un sens aléatoire pour explorer
-            if (Math.random() < 0.5) {
-                System.out.println("[TRACK] Phase 1: rotation à droite.");
-                turnSpot(turnVel, turnTime);
-            } else {
-                System.out.println("[TRACK] Phase 1: rotation à gauche.");
-                turnSpot(-turnVel, turnTime);
-            }
-            return;
-        }
-
-        // Variation faible -> probablement du bruit GPS -> petit pas en avant
+        // 6) Log de debug (très utile au début)
         System.out.println(String.format(
-                "[TRACK] Phase 1: dist target change peu (%.2f -> %.2f m) -> avance doucement.",
-                trackLastDistToTarget, distToTarget
+                "[TRACK P1] pos=(%.2f, %.2f) dock=(%.2f, %.2f) dist=%.2f  theta=%.2f rad  err=%.2f rad",
+                x, y, targetX, targetY, distToTarget, odoTheta, headingError
         ));
-        trackLastDistToTarget = distToTarget;
-        move(vel * 0.7f, 200);
+
+        // 7) Décision : tourner ou avancer
+        if (Math.abs(headingError) > ANGLE_TOL) {
+            // On doit corriger l'orientation avant d'avancer.
+
+            if (headingError > 0) {
+                // Dock à "gauche" -> on veut AUGMENTER l'angle -> tourner sur place dans ce sens
+                System.out.println("[TRACK P1] Dock à gauche -> rotation gauche.");
+                // NB : turnSpot(vel) fait décroître l'angle (voir updateOdometry),
+                // donc pour augmenter l'angle on utilise -turnVel.
+                turnSpot(-turnVel, turnTime);
+            } else {
+                // Dock à "droite" -> on veut DIMINUER l'angle
+                System.out.println("[TRACK P1] Dock à droite -> rotation droite.");
+                turnSpot(turnVel, turnTime);
+            }
+        } else {
+            // Orientation correcte -> on avance vers le dock
+            System.out.println("[TRACK P1] Orientation OK -> avancer vers le dock.");
+            move(fwdVel, moveTime);
+        }
     }
+
 
 
 

@@ -6,13 +6,8 @@
   <component name="ChangeListManager">
     <list default="true" id="30d387d6-7216-4fff-8f4f-e25f5e1dbb23" name="Default Changelist" comment="Tracking stable dans pièce vide">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/out/production/V-Rep v5/main/Controller$1$1.class" beforeDir="false" afterPath="$PROJECT_DIR$/out/production/V-Rep v5/main/Controller$1$1.class" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/out/production/V-Rep v5/main/Controller$1.class" beforeDir="false" afterPath="$PROJECT_DIR$/out/production/V-Rep v5/main/Controller$1.class" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/out/production/V-Rep v5/main/Controller$2.class" beforeDir="false" afterPath="$PROJECT_DIR$/out/production/V-Rep v5/main/Controller$2.class" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/out/production/V-Rep v5/main/Controller.class" beforeDir="false" afterPath="$PROJECT_DIR$/out/production/V-Rep v5/main/Controller.class" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/out/production/V-Rep v5/main/GUI.fxml" beforeDir="false" afterPath="$PROJECT_DIR$/out/production/V-Rep v5/main/GUI.fxml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/main/Controller.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/Controller.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/GUI.fxml" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/GUI.fxml" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
