@@ -892,20 +892,71 @@ public class Controller {
     private boolean startupDone = false;
 
 
-    // --- FSM pour Clean (pattern rectangulaire) ---
-    private static final int CLEAN_STATE_INIT    = 0;
-    private static final int CLEAN_STATE_FORWARD = 1;
-    private static final int CLEAN_STATE_TURN    = 2;
 
-    private int    cleanState      = CLEAN_STATE_INIT;
-    private int    cleanSideIndex  = 0;       // 0..3 pour 4 côtés du rectangle
-    private double cleanStartX     = 0.0;
-    private double cleanStartY     = 0.0;
 
-    // Paramètres du motif rectangulaire (à ajuster en simulation)
-    private static final double CLEAN_SIDE_LENGTH   = 1.0;  // longueur d’un côté (en mètres environ)
-    private static final int    CLEAN_STEP_TIME_MS  = 150;  // durée d’un “pas” en ligne droite
-    private static final int    CLEAN_TURN_TIME_MS  = 1600;  // temps approximatif pour tourner 90°
+
+    // --- FSM pour Clean (motif zigzag horizontal avec odométrie) ---
+
+    // Facteur de calibration pour les rotations (odométrie)
+    // 1.0 = pas de correction
+    // < 1.0 si le robot tourne trop, > 1.0 s'il ne tourne pas assez.
+    private static final double TURN_CALIB = 0.719;  // à ajuster en simulation
+
+    // États du Clean
+    private static final int CLEAN_STATE_ALIGN_FORWARD   = 0;
+    private static final int CLEAN_STATE_ALIGN_TURN_R    = 1;
+    private static final int CLEAN_STATE_ALIGN_GO_EAST   = 2;
+    private static final int CLEAN_STATE_ALIGN_TURN_180  = 3;
+    private static final int CLEAN_STATE_ZIG_ROW_START   = 4;
+    private static final int CLEAN_STATE_ZIG_ROW_RUN     = 5;
+    private static final int CLEAN_STATE_ZIG_UTURN_1     = 6;
+    private static final int CLEAN_STATE_ZIG_SHIFT       = 7;
+    private static final int CLEAN_STATE_ZIG_UTURN_2     = 8;
+    private static final int CLEAN_STATE_DONE            = 9;
+
+    private int cleanState = CLEAN_STATE_ALIGN_TURN_R;
+
+    // --- Géométrie de la pièce (approx) + marge de sécurité ---
+    private static final double ROOM_X_MAX   =  2.18;
+    private static final double ROOM_X_MIN   = -2.18;
+    private static final double ROOM_Y_MAX   =  2.21;
+    private static final double ROOM_Y_MIN   = -2.16;
+
+    private static final double CLEAN_MARGIN = 0.25; // distance sécurité murs
+
+    private static final double CLEAN_X_MAX_SAFE = ROOM_X_MAX - CLEAN_MARGIN; // ≈ 1.93
+    private static final double CLEAN_X_MIN_SAFE = ROOM_X_MIN + CLEAN_MARGIN; // ≈ -1.93
+    private static final double CLEAN_Y_MAX_SAFE = ROOM_Y_MAX - CLEAN_MARGIN; // ≈ 1.96
+    private static final double CLEAN_Y_MIN_SAFE = ROOM_Y_MIN + CLEAN_MARGIN; // ≈ -1.91
+
+    // Longueur max d’une bande horizontale (odométrie) – on reste un peu en-deçà
+    private static final double CLEAN_ROW_DIST_MAX   = 3.8;  // m
+    // Décalage en X entre deux bandes
+    private static final double CLEAN_STRIP_STEP     = 0.35; // m
+    // Distance initiale en +X pour s’avancer légèrement au départ
+    private static final double CLEAN_ALIGN_FWD_DIST = 0.25; // m
+    // Distance max pour l’alignement vers le mur EST (sécurité)
+    private static final double CLEAN_ALIGN_GO_EAST_MAX_DIST = 3.0; // m
+
+    // Limite de nombre de bandes
+    private static final int CLEAN_MAX_STRIPS = 12;
+    private int cleanStripIndex = 0;
+
+    // Odométrie locale d’un segment (ligne ou décalage)
+    private double cleanStartLeftEnc  = 0.0;
+    private double cleanStartRightEnc = 0.0;
+    private boolean cleanSegmentStarted = false;
+
+    // Sens actuel de la ligne horizontale : true = on va vers +Y, false = vers -Y
+    private boolean cleanRowDirPositiveY = true;
+
+    private static final double CLEAN_SIDE_LENGTH = 1.0; // longueur d’un côté (en mètres environ)
+    private static final int CLEAN_STEP_TIME_MS = 150; // durée d’un “pas” en ligne droite
+    private static final int CLEAN_TURN_TIME_MS = 1600; // temps approximatif pour tourner 90°
+
+
+
+
 
     // --- Stubs pour éviter les erreurs si le FXML appelle ces méthodes
     //     (ne dépendent d’aucune variable externe ; sans effet si le bouton n’existe pas) ---
@@ -985,73 +1036,198 @@ public class Controller {
     }
 
 
-    // Retourne true quand la phase de démarrage est terminée
-    private boolean startupStep() {
-        // On regarde "devant" : les sonars 1 et 4 (légèrement orientés)
-        double frontLeft  = getSonarRange(1);
-        double frontRight = getSonarRange(4);
-        double frontMin   = Math.min(frontLeft, frontRight);
 
-        final double SAFE_DIST = 0.6; // distance "confortable" à dégager (à ajuster)
-
-        if (frontMin < SAFE_DIST) {
-            // Trop près du mur : on tourne sur place pour élargir l'angle
-            System.out.println("[STARTUP] Trop près du mur, rotation d'évitement");
-            // Ici on tourne sur place : pas de risque de rentrer dans le mur
-            turnSpot(vel/2.0f, 3200);
-            return false; // pas encore fini
-        } else {
-            // On considère qu'on est suffisamment dégagé pour lancer le mode AUTO normal
-            System.out.println("[STARTUP] Démarrage terminé, passage en AUTO classique");
-            return true;
-        }
-    }
-
-
-
-    // Comportement Clean : motif rectangulaire simple
+    // Comportement Clean : motif zigzag horizontal (bandes en Y, décalage en X)
     public void clean() {
+
+        // Si on a fini toutes les bandes, on reste à l'arrêt
+        if (cleanState == CLEAN_STATE_DONE) {
+            setVel(0, 0);
+            return;
+        }
+
+        double x = getGPSX();
+        double y = getGPSY();
+
         switch (cleanState) {
-            case CLEAN_STATE_INIT:
-                // On mémorise la position de départ de ce côté
-                cleanStartX = getGPSX();
-                cleanStartY = getGPSY();
-                cleanState  = CLEAN_STATE_FORWARD;
+
+            // 1) On commence directement par un quart de tour à droite
+            //    (on ne s'avance pas vers le mur pour garder une bonne distance)
+            case CLEAN_STATE_ALIGN_TURN_R: {
+                // 90° à droite
+                turnByAngle(Math.PI / 2.0, vel / 2.0f, true); // true = tourner à droite
+
+                cleanSegmentStarted = false;
+                cleanState = CLEAN_STATE_ALIGN_GO_EAST;
                 break;
+            }
 
-            case CLEAN_STATE_FORWARD:
-                // Distance parcourue depuis le début de ce côté
-                double dx   = getGPSX() - cleanStartX;
-                double dy   = getGPSY() - cleanStartY;
-                double dist = Math.sqrt(dx * dx + dy * dy);
+            // 2) Avance vers le mur EST (direction -Y) jusqu'à une zone sûre (CLEAN_Y_MIN_SAFE)
+            case CLEAN_STATE_ALIGN_GO_EAST: {
+                if (!cleanSegmentStarted) {
+                    cleanResetSegmentOdo();
+                    cleanSegmentStarted = true;
+                }
 
-                if (dist < CLEAN_SIDE_LENGTH) {
-                    // On continue tout droit par petits pas
-                    move(vel * 0.8f, CLEAN_STEP_TIME_MS);
+                double dist        = cleanGetSegmentDistance();
+                boolean closeToEast = (y <= CLEAN_Y_MIN_SAFE);
+
+                // On avance tant qu'on n'est pas dans la "zone sûre" EST,
+                // et qu'on n'a pas dépassé une distance raisonnable.
+                if (!closeToEast && dist < CLEAN_ALIGN_GO_EAST_MAX_DIST) {
+                    // Orientation actuelle : vers -Y (après le 90° à droite)
+                    move(vel * 0.6f, CLEAN_STEP_TIME_MS);
                 } else {
-                    // On a atteint la longueur voulue, on passera au virage
-                    cleanState = CLEAN_STATE_TURN;
+                    cleanSegmentStarted = false;
+                    cleanState = CLEAN_STATE_ALIGN_TURN_180;
                 }
                 break;
+            }
 
-            case CLEAN_STATE_TURN:
-                // Tour sur place d’environ 90°
-                // (CLEAN_TURN_TIME_MS est à ajuster pour un quart de tour)
-                turnSpot(vel / 2.0f, CLEAN_TURN_TIME_MS);
+            // 3) Demi-tour pour regarder vers l'intérieur de la pièce (+Y)
+            case CLEAN_STATE_ALIGN_TURN_180: {
+                // 180° (sens quelconque, on choisit "droite" pour rester cohérent)
+                turnByAngle(Math.PI, vel / 2.0f, true);
 
-                // On passe au côté suivant
-                cleanSideIndex = (cleanSideIndex + 1) % 4;
+                // Première bande : on part vers +Y
+                cleanRowDirPositiveY = true;
+                cleanStripIndex      = 0;
 
-                // Et on recommence un nouveau segment
-                cleanState = CLEAN_STATE_INIT;
+                cleanSegmentStarted = false;
+                cleanState = CLEAN_STATE_ZIG_ROW_START;
                 break;
+            }
+
+            // 4) Début d'une nouvelle ligne horizontale
+            case CLEAN_STATE_ZIG_ROW_START: {
+                // Vérifier si on a encore de la place en X pour une nouvelle bande
+                if (x <= CLEAN_X_MIN_SAFE || cleanStripIndex >= CLEAN_MAX_STRIPS) {
+                    System.out.println("[CLEAN] Toutes les bandes effectuées ou limite X atteinte -> CLEAN terminé.");
+                    cleanState = CLEAN_STATE_DONE;
+                    setVel(0, 0);
+                    break;
+                }
+
+                cleanResetSegmentOdo();
+                cleanSegmentStarted = true;
+                cleanState = CLEAN_STATE_ZIG_ROW_RUN;
+                break;
+            }
+
+            // 5) Avance en Y (ligne horizontale)
+            case CLEAN_STATE_ZIG_ROW_RUN: {
+                double dist = cleanGetSegmentDistance();
+
+                boolean finishedRow = (dist >= CLEAN_ROW_DIST_MAX);
+
+                // Sécurité murs Y
+                if (cleanRowDirPositiveY && y >= CLEAN_Y_MAX_SAFE) {
+                    finishedRow = true;
+                }
+                if (!cleanRowDirPositiveY && y <= CLEAN_Y_MIN_SAFE) {
+                    finishedRow = true;
+                }
+
+                if (!finishedRow) {
+                    // IMPORTANT :
+                    // Le robot est déjà orienté dans la bonne direction (+Y ou -Y)
+                    // grâce aux rotations précédentes.
+                    // On avance donc TOUJOURS vers l'avant (vitesse positive).
+                    move(vel * 0.8f, CLEAN_STEP_TIME_MS);
+                } else {
+                    cleanSegmentStarted = false;
+                    cleanState = CLEAN_STATE_ZIG_UTURN_1;
+                }
+                break;
+            }
+
+
+            // 6) Premier virage du U-Turn (on se met dans l'axe X pour le décalage)
+            case CLEAN_STATE_ZIG_UTURN_1: {
+
+                // On veut toujours se décaler vers l'intérieur de la pièce, donc vers les X plus petits.
+                // Avec notre repère :
+                //  - Si on allait vers +Y (ligne "vers la gauche"), à la fin on fait un quart de tour à GAUCHE
+                //    pour pointer vers -X (vers le bas).
+                //  - Si on allait vers -Y (ligne "vers la droite"), on fait un quart de tour à DROITE
+                //    pour pointer vers -X également.
+                if (cleanRowDirPositiveY) {
+                    // Quart de tour à gauche
+                    turnByAngle(Math.PI / 2.0, vel / 2.0f, false); // false = tourner à gauche
+                } else {
+                    // Quart de tour à droite
+                    turnByAngle(Math.PI / 2.0, vel / 2.0f, true);  // true = tourner à droite
+                }
+
+                cleanSegmentStarted = false;
+                cleanState = CLEAN_STATE_ZIG_SHIFT;
+                break;
+            }
+
+            // 7) Décalage en X (entre deux bandes)
+            case CLEAN_STATE_ZIG_SHIFT: {
+                if (!cleanSegmentStarted) {
+                    cleanResetSegmentOdo();
+                    cleanSegmentStarted = true;
+                }
+
+                double dist       = cleanGetSegmentDistance();
+                boolean reachedShift = (dist >= CLEAN_STRIP_STEP);
+                boolean outOfRoom    = (x <= CLEAN_X_MIN_SAFE);
+
+                if (!reachedShift && !outOfRoom) {
+                    // Orientation actuelle : vers -X ; on "descend" d'une bande
+                    move(vel * 0.6f, CLEAN_STEP_TIME_MS);
+                } else {
+                    cleanSegmentStarted = false;
+
+                    // Si on ne peut plus se décaler, on arrête le Clean
+                    if (outOfRoom) {
+                        System.out.println("[CLEAN] Plus de place pour se décaler en X -> CLEAN terminé.");
+                        cleanState = CLEAN_STATE_DONE;
+                    } else {
+                        // Décalage validé : on a créé une nouvelle "bande"
+                        cleanStripIndex++;
+                        cleanState = CLEAN_STATE_ZIG_UTURN_2;
+                    }
+                }
+                break;
+            }
+
+            // 8) Deuxième virage du U-Turn (on se remet parallèle à Y, sens inversé)
+            case CLEAN_STATE_ZIG_UTURN_2: {
+
+                // Après le shift, on est orienté vers -X.
+                // Pour se remettre parallèle à Y :
+                //  - si on allait vers +Y, on a tourné à gauche puis avancé en -X.
+                //    On tourne ENCORE à gauche pour se retrouver vers -Y.
+                //  - si on allait vers -Y, on a tourné à droite puis avancé en -X.
+                //    On tourne ENCORE à droite pour se retrouver vers +Y.
+                if (cleanRowDirPositiveY) {
+                    // encore un quart de tour à gauche
+                    turnByAngle(Math.PI / 2.0, vel / 2.0f, false);
+                } else {
+                    // encore un quart de tour à droite
+                    turnByAngle(Math.PI / 2.0, vel / 2.0f, true);
+                }
+
+                // Inversion du sens pour la prochaine ligne (aller-retour)
+                cleanRowDirPositiveY = !cleanRowDirPositiveY;
+
+                cleanSegmentStarted = false;
+                cleanState = CLEAN_STATE_ZIG_ROW_START;
+                break;
+            }
 
             default:
-                // Sécurité : on réinitialise si jamais on tombe dans un état inconnu
-                cleanState = CLEAN_STATE_INIT;
+                // Sécurité : si jamais l'état est incohérent, on repart proprement
+                cleanState = CLEAN_STATE_ALIGN_TURN_R;
+                cleanSegmentStarted = false;
                 break;
         }
     }
+
+
 
 
     public void wander() {
@@ -1233,14 +1409,6 @@ public class Controller {
      */
     private void autoModeWithTLU(double cam, double bat, double snr, double gps)
     {
-        // ---------- Phase de démarrage : se dégager du mur initial ----------
-        if (!startupDone) {
-            // Tant que startupStep() renvoie false, on ne fait que ça
-            if (startupStep()) {
-                startupDone = true;
-            }
-            return; // on ne lance pas encore les TLUs / subsomption
-        }
 
         // ---------- Normalisation des capteurs dans [0,1] ----------
 
@@ -1307,7 +1475,7 @@ public class Controller {
             // En phase 2 de Track, on ne laisse plus Avoid prendre la main.
             newBehavior = BEH_TRACK;
         }
-        else if (avoidActive) {
+        else if (avoidActive && !isCleanInAlignmentPhase()) {
             newBehavior = BEH_AVOID;
         }
         else if (trackActive) {
@@ -1634,16 +1802,11 @@ public class Controller {
 
     public void avoid()
     {
-        // Si tu as ce flag pour la phase 2 du docking, on le garde :
+        // Si on est docké, plus d'évitement
         if (trackDocked) {
-            // Une fois docké, plus d'avoid
             setVel(0, 0);
             return;
         }
-
-        // (Optionnel) Si tu as inTrackPhase2 :
-        // Pendant le docking caméra, on laisse Track gérer l'approche
-        // if (inTrackPhase2) return;
 
         // 1) Lecture de tous les sonars
         double s0 = getSonarRange(0); // gauche latéral
@@ -1653,86 +1816,77 @@ public class Controller {
         double s4 = getSonarRange(4); // droite diagonal
         double s5 = getSonarRange(5); // droite latéral
 
-        // "Vraiment devant" : uniquement les deux capteurs quasi frontaux
+        // "Vraiment devant" : capteurs quasi frontaux
         double frontMin = Math.min(s2, s3);
 
-        // Pour choisir gauche/droite, on regarde les cônes "avant" (1,2) et (3,4)
-        double leftFront  = Math.min(s1, s2); // gauche devant
-        double rightFront = Math.min(s3, s4); // droite devant
+        // Pour savoir quel côté est le plus bouché / dégagé
+        double leftFront  = Math.min(s1, s2); // cône avant gauche
+        double rightFront = Math.min(s3, s4); // cône avant droit
 
-        // Pour détecter un piège très proche, on regarde TOUT
+        // Pour détecter un piège très proche, on regarde tout
         double globalMin = Math.min(
                 Math.min(Math.min(s0, s1), Math.min(s2, s3)),
                 Math.min(s4, s5)
         );
 
-        // Seuil "il y a vraiment quelque chose devant"
-        final double THRESH_FRONT = 0.45; // m
-        // Seuil "je suis collé à un truc" → piège possible
-        final double THRESH_TRAP  = 0.18; // m
+        // Seuil "danger devant"
+        final double FRONT_DANGER = 0.45; // m
+        // Seuil "vraiment collé"
+        final double TRAP_DIST    = 0.20; // m
 
         // 2) Si rien de vraiment proche devant ET pas de piège global, on ne fait rien
         //    -> permet de longer un mur sur le côté sans déclencher avoid
-        if (frontMin > THRESH_FRONT && globalMin > THRESH_TRAP) {
-            avoidStuckCounter = 0;
+        if (frontMin > FRONT_DANGER && globalMin > TRAP_DIST) {
             return;
         }
 
-        // 3) Détection d'un avoid qui tourne en rond / ne fait plus avancer le robot
-        //    -> on utilise isStuck() qui regarde le GPS sur plusieurs secondes
-        if (isStuck()) {
-            avoidStuckCounter++;
-        } else {
-            avoidStuckCounter = 0;
-        }
+        // 3) Cas "piège" : très proche quelque part
+        if (globalMin < TRAP_DIST) {
+            System.out.println("[AVOID] TRAP: très proche d'un obstacle -> gros recul + grande rotation.");
 
-        // 4) Cas "piège" : très proche quelque part + coincé depuis un moment
-        if (avoidStuckCounter >= 2 && globalMin < THRESH_TRAP) {
-            System.out.println("[AVOID] Coincé près d'un obstacle -> manœuvre d'évasion.");
+            // Recul franc pour se décoller
+            move(-vel * 0.7f, 700);
 
-            // gros recul
-            move(-vel * 0.7f, 600);
+            // Choix du côté le plus dégagé pour la rotation
+            boolean turnRight = (rightFront > leftFront);
 
-            // grande rotation aléatoire
-            if (Math.random() < 0.5) {
-                turnSpot(vel * 0.7f, 800);
-            } else {
-                turnSpot(-vel * 0.7f, 800);
-            }
+            // Grande rotation (~135°) pour bien sortir du piège
+            double angle = 3.0 * Math.PI / 4.0; // 135°
+            turnByAngle(angle, vel / 2.0f, turnRight);
 
-            avoidStuckCounter = 0;
             return;
         }
 
+        // 4) Cas normal : obstacle devant, mais pas encore considéré "piégé"
+        if (frontMin <= FRONT_DANGER) {
+            System.out.println("[AVOID] Obstacle frontal -> recul + rotation côté dégagé.");
 
-        // 5) Cas normal : obstacle vraiment devant, mais pas encore considéré “piégé”
-        if (frontMin <= THRESH_FRONT) {
-            System.out.println("[AVOID] Obstacle devant -> recul + rotation côté dégagé.");
-
-            // petit recul pour se décoller du mur/meuble
-            move(-vel * 0.5f, 250);
+            // Recul de sécurité
+            move(-vel * 0.6f, 400);
 
             // Choix du côté de rotation :
-            //  diff > 0 => rightFront > leftFront => plus d'espace à droite
+            //  - si rightFront > leftFront => plus d'espace à droite -> tourner à droite
+            //  - sinon, tourner à gauche
             double diff = rightFront - leftFront;
 
-            // Si les deux côtés sont similaires, on choisit un côté au hasard
+            boolean turnRight;
             if (Math.abs(diff) < 0.05) {
-                diff = (Math.random() < 0.5) ? 1.0 : -1.0;
-            }
-
-            float turnVel  = vel / 2.0f;
-            int   turnTime = 300;
-
-            if (diff > 0) {
-                // plus d'espace à droite -> tourne à droite
-                turnSpot(turnVel, turnTime);
+                // quasiment pareil des deux côtés -> choisir au hasard pour éviter des patterns bizarres
+                turnRight = (Math.random() < 0.5);
             } else {
-                // plus d'espace à gauche -> tourne à gauche
-                turnSpot(-turnVel, turnTime);
+                turnRight = (rightFront > leftFront);
             }
+
+            // Rotation moyenne (~60°) pour contourner l'obstacle sans faire un demi-tour
+            double angle = Math.PI / 3.0; // 60°
+            turnByAngle(angle, vel / 2.0f, turnRight);
+
+            return;
         }
+
+        // Sinon, par sécurité, on ne fait rien ici
     }
+
 
 
     // Mise à jour de l'orientation estimée à partir des encodeurs
@@ -1770,6 +1924,95 @@ public class Controller {
         while (a < -Math.PI) a += 2.0 * Math.PI;
         return a;
     }
+
+    // Tourne le robot d'un angle donné (radians) en utilisant les encodeurs.
+    // angleRad : angle en radians (ex: Math.PI/2 pour 90°, Math.PI pour 180°).
+    // wheelVel : vitesse des roues (ex: vel/2.0f).
+    // turnRight : true = tourner à droite, false = tourner à gauche.
+    private void turnByAngle(double angleRad, float wheelVel, boolean turnRight) {
+        angleRad = Math.abs(angleRad); // on travaille sur la magnitude
+
+        // On applique la calibration ici
+        double targetTheta = angleRad * TURN_CALIB;
+
+        // 1) Lire la position initiale des encodeurs (en tours de roues)
+        double startLeftRev  = readLeftWheelEnc();
+        double startRightRev = readRightWheelEnc();
+
+        // 2) Déterminer les vitesses des roues pour tourner sur place
+        //    Convention : turnRight = true -> rotation à droite (comme turnSpot(vel>0)).
+        float leftCmd, rightCmd;
+        if (turnRight) {
+            // droite : roue gauche en avant, roue droite en arrière
+            leftCmd  =  wheelVel;
+            rightCmd = -wheelVel;
+        } else {
+            // gauche : roue gauche en arrière, roue droite en avant
+            leftCmd  = -wheelVel;
+            rightCmd =  wheelVel;
+        }
+
+        // 3) Boucle jusqu'à ce que l'angle atteint soit suffisant
+        while (true) {
+            // Appliquer la vitesse de rotation
+            setVel(leftCmd, rightCmd);
+
+            // Laisser un peu de temps à la simu pour bouger
+            try {
+                Thread.sleep(30);  // 30 ms : assez fin + pas trop lourd
+            } catch (InterruptedException e) {
+                // On ignore l'interruption pour ce projet
+            }
+
+            // 4) Relire les encodeurs
+            double currentLeftRev  = readLeftWheelEnc();
+            double currentRightRev = readRightWheelEnc();
+
+            // 5) Convertir en distance linéaire parcourue par chaque roue
+            double dLeft  = 2.0 * Math.PI * WHEEL_RADIUS * (currentLeftRev  - startLeftRev);
+            double dRight = 2.0 * Math.PI * WHEEL_RADIUS * (currentRightRev - startRightRev);
+
+            // 6) Estimation de la rotation (modèle différentiel)
+            double dTheta = (dRight - dLeft) / WHEEL_BASE;  // en radians
+            double absTheta = Math.abs(dTheta);
+
+            // 7) Vérifier si on a atteint l'angle demandé
+            if (absTheta >= targetTheta) {
+                break;
+            }
+        }
+
+        // 8) Stopper les roues
+        setVel(0, 0);
+    }
+
+
+
+
+
+
+
+
+
+    // --- Helpers Clean : odométrie locale d’un segment (ligne ou décalage) ---
+
+    // À appeler au début d’un segment (ligne ou shift)
+    private void cleanResetSegmentOdo() {
+        cleanStartLeftEnc  = getLeftWheelEnc();
+        cleanStartRightEnc = getRightWheelEnc();
+    }
+
+    // Distance parcourue depuis le début du segment courant (en mètres)
+    private double cleanGetSegmentDistance() {
+        double dLeftRev  = getLeftWheelEnc()  - cleanStartLeftEnc;
+        double dRightRev = getRightWheelEnc() - cleanStartRightEnc;
+
+        double dLeft  = 2.0 * Math.PI * WHEEL_RADIUS * dLeftRev;
+        double dRight = 2.0 * Math.PI * WHEEL_RADIUS * dRightRev;
+
+        return 0.5 * (dLeft + dRight);
+    }
+
 
 
 
@@ -1809,6 +2052,18 @@ public class Controller {
         if (x > 1.0) return 1.0;
         return x;
     }
+
+
+    // Retourne true si le Clean est encore dans la phase d'alignement initial
+    private boolean isCleanInAlignmentPhase() {
+        return cleanState == CLEAN_STATE_ALIGN_FORWARD
+                || cleanState == CLEAN_STATE_ALIGN_TURN_R
+                || cleanState == CLEAN_STATE_ALIGN_GO_EAST
+                || cleanState == CLEAN_STATE_ALIGN_TURN_180;
+    }
+
+
+
 
     // Affiche un message seulement si le comportement a changé
     private void logBehaviorChangeIfNeeded(int newBehavior) {

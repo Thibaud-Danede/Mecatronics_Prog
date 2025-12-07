@@ -4,9 +4,8 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="30d387d6-7216-4fff-8f4f-e25f5e1dbb23" name="Default Changelist" comment="Tracking stable dans pièce vide">
+    <list default="true" id="30d387d6-7216-4fff-8f4f-e25f5e1dbb23" name="Default Changelist" comment="Rétablissement d'un track qui marche à peu près">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/out/production/V-Rep v5/main/Controller.class" beforeDir="false" afterPath="$PROJECT_DIR$/out/production/V-Rep v5/main/Controller.class" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/main/Controller.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/Controller.java" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
@@ -237,7 +236,15 @@
       <option name="project" value="LOCAL" />
       <updated>1764526242675</updated>
     </task>
-    <option name="localTasksCounter" value="2" />
+    <task id="LOCAL-00002" summary="Rétablissement d'un track qui marche à peu près">
+      <option name="closed" value="true" />
+      <created>1764550530537</created>
+      <option name="number" value="00002" />
+      <option name="presentableId" value="LOCAL-00002" />
+      <option name="project" value="LOCAL" />
+      <updated>1764550530537</updated>
+    </task>
+    <option name="localTasksCounter" value="3" />
     <servers />
   </component>
   <component name="ToolWindowManager">
@@ -275,7 +282,8 @@
   </component>
   <component name="VcsManagerConfiguration">
     <MESSAGE value="Tracking stable dans pièce vide" />
-    <option name="LAST_COMMIT_MESSAGE" value="Tracking stable dans pièce vide" />
+    <MESSAGE value="Rétablissement d'un track qui marche à peu près" />
+    <option name="LAST_COMMIT_MESSAGE" value="Rétablissement d'un track qui marche à peu près" />
   </component>
   <component name="editorHistoryManager">
     <entry file="file://$PROJECT_DIR$/src/main/Behavior.java" />
