@@ -6,8 +6,11 @@
   <component name="ChangeListManager">
     <list default="true" id="30d387d6-7216-4fff-8f4f-e25f5e1dbb23" name="Default Changelist" comment="Rétablissement d'un track qui marche à peu près">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/out/production/V-Rep v5/main/Controller.class" beforeDir="false" afterPath="$PROJECT_DIR$/out/production/V-Rep v5/main/Controller.class" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/main/Controller.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/Controller.java" afterDir="false" />
     </list>
+    <ignored path="$PROJECT_DIR$/out/" />
+    <option name="EXCLUDED_CONVERTED_TO_IGNORED" value="true" />
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
@@ -21,13 +24,34 @@
   <component name="CoverageViewManager">
     <option name="myElementSize" value="253" />
   </component>
+  <component name="FUSProjectUsageTrigger">
+    <session id="399254837">
+      <usages-collector id="statistics.lifecycle.project">
+        <counts>
+          <entry key="project.closed" value="2" />
+          <entry key="project.open.time.7" value="2" />
+          <entry key="project.opened" value="2" />
+        </counts>
+      </usages-collector>
+      <usages-collector id="statistics.file.extensions.edit">
+        <counts>
+          <entry key="java" value="83" />
+        </counts>
+      </usages-collector>
+      <usages-collector id="statistics.file.types.edit">
+        <counts>
+          <entry key="JAVA" value="83" />
+        </counts>
+      </usages-collector>
+    </session>
+  </component>
   <component name="FileEditorManager">
     <leaf SIDE_TABS_SIZE_LIMIT_KEY="300">
       <file pinned="false" current-in-tab="true">
         <entry file="file://$PROJECT_DIR$/src/main/Controller.java">
           <provider selected="true" editor-type-id="text-editor">
-            <state relative-caret-position="410">
-              <caret line="951" lean-forward="true" selection-start-line="951" selection-end-line="951" />
+            <state relative-caret-position="140">
+              <caret line="919" column="51" selection-start-line="919" selection-start-column="51" selection-end-line="919" selection-end-column="51" />
               <folding>
                 <element signature="imports" expanded="true" />
                 <element signature="e#10159#10160#0" expanded="true" />
@@ -66,12 +90,6 @@
                 <element signature="e#22895#22896#0" expanded="true" />
                 <element signature="e#23139#23140#0" expanded="true" />
                 <element signature="e#23172#23173#0" expanded="true" />
-                <element signature="e#28825#28979#0" expanded="true" />
-                <element signature="e#28978#28979#0" expanded="true" />
-                <element signature="e#31473#31474#0" expanded="true" />
-                <element signature="e#31494#31495#0" expanded="true" />
-                <element signature="e#33779#33780#0" expanded="true" />
-                <element signature="e#33809#33810#0" expanded="true" />
               </folding>
             </state>
           </provider>
@@ -98,7 +116,6 @@
       <find>getSonarRanges</find>
       <find>getSonarRange</find>
       <find>update</find>
-      <find>tlu</find>
       <find>1.0</find>
       <find>coordinator</find>
       <find>getsonar</find>
@@ -109,23 +126,24 @@
       <find>X_MIN</find>
       <find>avoid</find>
       <find>class</find>
+      <find>avoid()</find>
+      <find>run()</find>
+      <find>move(</find>
+      <find>WHEEL_RADIUS</find>
+      <find>turnByAngle</find>
+      <find>wheel_radius</find>
+      <find>avoid(</find>
+      <find>// Seuil &quot;danger devant&quot;</find>
+      <find>clean()</find>
+      <find>tlu</find>
+      <find>clean(</find>
+      <find>CLEAN_X_MAX_SAFE</find>
+      <find>CLEAN_Y_MAX_SAFE</find>
     </findStrings>
   </component>
   <component name="Git.Settings">
     <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$/.." />
   </component>
-  <component name="GitHubPullRequestSearchHistory">{
-  &quot;lastFilter&quot;: {
-    &quot;state&quot;: &quot;OPEN&quot;,
-    &quot;assignee&quot;: &quot;Thibaud-Danede&quot;
-  }
-}</component>
-  <component name="GithubPullRequestsUISettings">{
-  &quot;selectedUrlAndAccountId&quot;: {
-    &quot;url&quot;: &quot;https://github.com/Thibaud-Danede/Mecatronics_Prog.git&quot;,
-    &quot;accountId&quot;: &quot;78cc867d-eed4-453b-9eb3-e93277a4a237&quot;
-  }
-}</component>
   <component name="GradleLocalSettings">
     <option name="projectSyncType">
       <map>
@@ -144,13 +162,10 @@
       </list>
     </option>
   </component>
-  <component name="ProjectColorInfo">{
-  &quot;associatedIndex&quot;: 6
-}</component>
-  <component name="ProjectFrameBounds" extendedState="6">
+  <component name="ProjectFrameBounds" extendedState="7">
     <option name="x" value="10" />
-    <option name="width" value="1938" />
-    <option name="height" value="1048" />
+    <option name="width" value="1940" />
+    <option name="height" value="1050" />
   </component>
   <component name="ProjectId" id="368BPY7HmHVbul2RqNMKJEUcGua" />
   <component name="ProjectView">
@@ -187,16 +202,18 @@
   <component name="ProjectViewState">
     <option name="showLibraryContents" value="true" />
   </component>
-  <component name="PropertiesComponent">{
-  &quot;keyToString&quot;: {
-    &quot;Application.Main.executor&quot;: &quot;Run&quot;,
-    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
-    &quot;git-widget-placeholder&quot;: &quot;main&quot;,
-    &quot;kotlin-language-version-configured&quot;: &quot;true&quot;,
-    &quot;last_opened_file_path&quot;: &quot;C:/Users/DESKTOP 2.0/WORKSPACE/Mecatronics_Prog/V-Rep v5&quot;
-  }
-}</component>
+  <component name="RunDashboard">
+    <option name="ruleStates">
+      <list>
+        <RuleState>
+          <option name="name" value="ConfigurationTypeDashboardGroupingRule" />
+        </RuleState>
+        <RuleState>
+          <option name="name" value="StatusDashboardGroupingRule" />
+        </RuleState>
+      </list>
+    </option>
+  </component>
   <component name="RunManager">
     <configuration name="Main" type="Application" factoryName="Application" temporary="true" nameIsGenerated="true">
       <option name="MAIN_CLASS_NAME" value="main.Main" />
@@ -248,10 +265,9 @@
     <servers />
   </component>
   <component name="ToolWindowManager">
-    <frame x="-7" y="-7" width="1550" height="838" extended-state="6" />
-    <editor active="true" />
+    <frame x="-7" y="-7" width="1550" height="838" extended-state="7" />
     <layout>
-      <window_info content_ui="combo" id="Project" order="0" visible="true" weight="0.1409396" />
+      <window_info content_ui="combo" id="Project" order="0" visible="true" weight="0.14496644" />
       <window_info id="Structure" order="1" side_tool="true" weight="0.25" />
       <window_info id="Image Layers" order="2" />
       <window_info id="Designer" order="3" />
@@ -260,7 +276,7 @@
       <window_info id="Favorites" order="6" side_tool="true" />
       <window_info anchor="bottom" id="Message" order="0" />
       <window_info anchor="bottom" id="Find" order="1" />
-      <window_info active="true" anchor="bottom" id="Run" order="2" visible="true" weight="0.1858156" />
+      <window_info anchor="bottom" id="Run" order="2" weight="0.1858156" />
       <window_info anchor="bottom" id="Debug" order="3" weight="0.4" />
       <window_info anchor="bottom" id="Cvs" order="4" weight="0.25" />
       <window_info anchor="bottom" id="Inspection" order="5" weight="0.4" />
@@ -279,6 +295,9 @@
       <window_info anchor="right" id="Maven Projects" order="7" />
       <window_info anchor="right" id="Coverage" order="8" side_tool="true" weight="0.32992172" />
     </layout>
+  </component>
+  <component name="VcsContentAnnotationSettings">
+    <option name="myLimit" value="2678400000" />
   </component>
   <component name="VcsManagerConfiguration">
     <MESSAGE value="Tracking stable dans pièce vide" />
@@ -309,35 +328,12 @@
     <entry file="file://$PROJECT_DIR$/.project">
       <provider selected="true" editor-type-id="text-editor" />
     </entry>
-    <entry file="jar://$PROJECT_DIR$/../../../../../Program Files/Java/jdk1.8.0_152/jre/lib/rt.jar!/sun/launcher/LauncherHelper.class">
-      <provider selected="true" editor-type-id="text-editor">
-        <state relative-caret-position="447">
-          <caret line="125" selection-start-line="125" selection-end-line="125" />
-        </state>
-      </provider>
-    </entry>
-    <entry file="jar://$PROJECT_DIR$/../../../../../Program Files/Java/jdk1.8.0_152/javafx-src.zip!/com/sun/javafx/application/LauncherImpl.java">
-      <provider selected="true" editor-type-id="text-editor">
-        <state relative-caret-position="175">
-          <caret line="327" selection-start-line="327" selection-end-line="327" />
-        </state>
-      </provider>
-    </entry>
-    <entry file="file://$PROJECT_DIR$/src/main/Main.java">
-      <provider selected="true" editor-type-id="text-editor">
-        <state relative-caret-position="85">
-          <caret line="5" column="26" selection-start-line="5" selection-start-column="26" selection-end-line="5" selection-end-column="26" />
-          <folding>
-            <element signature="e#564#565#0" expanded="true" />
-            <element signature="e#592#593#0" expanded="true" />
-          </folding>
-        </state>
-      </provider>
-    </entry>
+    <entry file="jar://$PROJECT_DIR$/../../../../../Program Files/Java/jdk1.8.0_152/jre/lib/rt.jar!/sun/launcher/LauncherHelper.class" />
+    <entry file="jar://$PROJECT_DIR$/../../../../../Program Files/Java/jdk1.8.0_152/javafx-src.zip!/com/sun/javafx/application/LauncherImpl.java" />
     <entry file="file://$PROJECT_DIR$/src/main/Controller.java">
       <provider selected="true" editor-type-id="text-editor">
-        <state relative-caret-position="410">
-          <caret line="951" lean-forward="true" selection-start-line="951" selection-end-line="951" />
+        <state relative-caret-position="140">
+          <caret line="919" column="51" selection-start-line="919" selection-start-column="51" selection-end-line="919" selection-end-column="51" />
           <folding>
             <element signature="imports" expanded="true" />
             <element signature="e#10159#10160#0" expanded="true" />
@@ -376,12 +372,17 @@
             <element signature="e#22895#22896#0" expanded="true" />
             <element signature="e#23139#23140#0" expanded="true" />
             <element signature="e#23172#23173#0" expanded="true" />
-            <element signature="e#28825#28979#0" expanded="true" />
-            <element signature="e#28978#28979#0" expanded="true" />
-            <element signature="e#31473#31474#0" expanded="true" />
-            <element signature="e#31494#31495#0" expanded="true" />
-            <element signature="e#33779#33780#0" expanded="true" />
-            <element signature="e#33809#33810#0" expanded="true" />
+          </folding>
+        </state>
+      </provider>
+    </entry>
+    <entry file="file://$PROJECT_DIR$/src/main/Main.java">
+      <provider selected="true" editor-type-id="text-editor">
+        <state relative-caret-position="85">
+          <caret line="5" column="26" selection-start-line="5" selection-start-column="26" selection-end-line="5" selection-end-column="26" />
+          <folding>
+            <element signature="e#564#565#0" expanded="true" />
+            <element signature="e#592#593#0" expanded="true" />
           </folding>
         </state>
       </provider>

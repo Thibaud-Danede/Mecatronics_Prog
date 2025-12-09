@@ -814,6 +814,15 @@ public class Controller {
 //    private FSM clean  = new Clean( 50, 3);
 //    private FSM wander = new Wander(3, 25);
 
+    // Distance à partir de laquelle Avoid s'active (mètres)
+    // À CHOISIR plus petite que la distance mini que Clean garde aux murs.
+    private static final double AVOID_FRONT_DIST = 0.30;   // ex: 0.30 m
+
+    // Ne pas supprimer
+    private double trackLastDistToTarget = Double.MAX_VALUE;
+
+
+
     // --- Waypoints pour la phase 1 du Track (GPS uniquement) ---
     // À REMPLACER par tes vraies coordonnées (en mètres, dans le repère du GPS Coppelia)
     private static final double[][] TRACK_WAYPOINTS = {
@@ -822,17 +831,6 @@ public class Controller {
 
 
     private static final double WP_REACHED_DIST = 0.25; // rayon pour considérer un WP atteint
-
-    private int    trackCurrentWp        = 0;
-    private double trackLastDistToTarget = Double.MAX_VALUE;
-
-
-    // --- État Track phase 1 (retour GPS) ---
-    private double  trackLastDistToDock  = Double.MAX_VALUE;
-
-
-    // Compteur pour détecter quand Avoid est lui-même coincé
-    private int avoidStuckCounter = 0;
 
 
     // Indique si on est actuellement en phase 2 du track (approche dock)
@@ -850,8 +848,8 @@ public class Controller {
     private double odoTheta     = 0.0; // orientation estimée (rad)
 
     // Paramètres mécaniques approximatifs du Roomba
-    private static final double WHEEL_RADIUS = 0.035; // ~3.5 cm
-    private static final double WHEEL_BASE   = 0.27;  // ~27 cm entre les roues
+    private static final double WHEEL_RADIUS = 0.033; // ~3.5 cm
+    private static final double WHEEL_BASE   = 0.30;  // ~27 cm entre les roues
 
 
     // --- Position de la station de charge (dock) ---
@@ -888,9 +886,6 @@ public class Controller {
     // Log batterie périodique
     private long lastBatteryLogTimeMs = 0;
 
-    // Phase de démarrage (pour se dégager du mur initial)
-    private boolean startupDone = false;
-
 
 
 
@@ -922,7 +917,7 @@ public class Controller {
     private static final double ROOM_Y_MAX   =  2.21;
     private static final double ROOM_Y_MIN   = -2.16;
 
-    private static final double CLEAN_MARGIN = 0.25; // distance sécurité murs
+    private static final double CLEAN_MARGIN = 0.50; // distance sécurité murs
 
     private static final double CLEAN_X_MAX_SAFE = ROOM_X_MAX - CLEAN_MARGIN; // ≈ 1.93
     private static final double CLEAN_X_MIN_SAFE = ROOM_X_MIN + CLEAN_MARGIN; // ≈ -1.93
@@ -950,9 +945,7 @@ public class Controller {
     // Sens actuel de la ligne horizontale : true = on va vers +Y, false = vers -Y
     private boolean cleanRowDirPositiveY = true;
 
-    private static final double CLEAN_SIDE_LENGTH = 1.0; // longueur d’un côté (en mètres environ)
     private static final int CLEAN_STEP_TIME_MS = 150; // durée d’un “pas” en ligne droite
-    private static final int CLEAN_TURN_TIME_MS = 1600; // temps approximatif pour tourner 90°
 
 
 
@@ -1055,7 +1048,7 @@ public class Controller {
             //    (on ne s'avance pas vers le mur pour garder une bonne distance)
             case CLEAN_STATE_ALIGN_TURN_R: {
                 // 90° à droite
-                turnByAngle(Math.PI / 2.0, vel / 2.0f, true); // true = tourner à droite
+                turnByAngle(Math.PI / 2.0, vel / 4.0f, true); // true = tourner à droite
 
                 cleanSegmentStarted = false;
                 cleanState = CLEAN_STATE_ALIGN_GO_EAST;
@@ -1087,7 +1080,7 @@ public class Controller {
             // 3) Demi-tour pour regarder vers l'intérieur de la pièce (+Y)
             case CLEAN_STATE_ALIGN_TURN_180: {
                 // 180° (sens quelconque, on choisit "droite" pour rester cohérent)
-                turnByAngle(Math.PI, vel / 2.0f, true);
+                turnByAngle(Math.PI, vel / 4.0f, true);
 
                 // Première bande : on part vers +Y
                 cleanRowDirPositiveY = true;
@@ -1153,10 +1146,10 @@ public class Controller {
                 //    pour pointer vers -X également.
                 if (cleanRowDirPositiveY) {
                     // Quart de tour à gauche
-                    turnByAngle(Math.PI / 2.0, vel / 2.0f, false); // false = tourner à gauche
+                    turnByAngle(Math.PI / 2.0, vel / 4.0f, false); // false = tourner à gauche
                 } else {
                     // Quart de tour à droite
-                    turnByAngle(Math.PI / 2.0, vel / 2.0f, true);  // true = tourner à droite
+                    turnByAngle(Math.PI / 2.0, vel / 4.0f, true);  // true = tourner à droite
                 }
 
                 cleanSegmentStarted = false;
@@ -1205,10 +1198,10 @@ public class Controller {
                 //    On tourne ENCORE à droite pour se retrouver vers +Y.
                 if (cleanRowDirPositiveY) {
                     // encore un quart de tour à gauche
-                    turnByAngle(Math.PI / 2.0, vel / 2.0f, false);
+                    turnByAngle(Math.PI / 2.0, vel / 4.0f, false);
                 } else {
                     // encore un quart de tour à droite
-                    turnByAngle(Math.PI / 2.0, vel / 2.0f, true);
+                    turnByAngle(Math.PI / 2.0, vel / 4.0f, true);
                 }
 
                 // Inversion du sens pour la prochaine ligne (aller-retour)
@@ -1436,15 +1429,16 @@ public class Controller {
         double snrClose   = 1.0 - snrClamped;   // 0 = loin, 1 = très proche
 
         // ---------- TLU Avoid ----------
-        // On veut que Avoid s'active quand un obstacle est à moins de ~0.45 m devant
-        // THRESH_FRONT = 0.45 dans avoid()
-        // snrClose = 1 - snrFront > fAvoid  <=>  snrFront < 1 - fAvoid
-        // Pour snrFront < 0.45, on prend fAvoid ≈ 1 - 0.45 = 0.55
+        // On veut que Avoid s'active quand un obstacle est à moins de AVOID_FRONT_DIST devant.
+        // Condition équivalente : snrFront < AVOID_FRONT_DIST
+        // Or snrClose = 1 - snrFront, donc : 1 - snrFront > fAvoid  <=>  snrFront < 1 - fAvoid
+        // => on prend fAvoid = 1 - AVOID_FRONT_DIST
         double[] sAvoid = { snrClose };
         double[] wAvoid = { 1.0 };
-        double   fAvoid = 0.55;
+        double fAvoid = 1.0 - AVOID_FRONT_DIST;   // ex: 1 - 0.30 = 0.70
 
         boolean avoidActive = tlu(wAvoid, sAvoid, fAvoid);
+
 
         // ---------- TLU Track : s'active quand la batterie est faible ----------
 
@@ -1829,10 +1823,11 @@ public class Controller {
                 Math.min(s4, s5)
         );
 
-        // Seuil "danger devant"
-        final double FRONT_DANGER = 0.45; // m
-        // Seuil "vraiment collé"
-        final double TRAP_DIST    = 0.20; // m
+        // Seuil "danger devant" (doit être cohérent avec le TLU)
+        final double FRONT_DANGER = AVOID_FRONT_DIST; // ex: 0.30 m
+        // Seuil "vraiment collé" : un peu plus petit que FRONT_DANGER
+        final double TRAP_DIST    = AVOID_FRONT_DIST - 0.10; // ex: 0.20 m
+
 
         // 2) Si rien de vraiment proche devant ET pas de piège global, on ne fait rien
         //    -> permet de longer un mur sur le côté sans déclencher avoid
@@ -1852,7 +1847,7 @@ public class Controller {
 
             // Grande rotation (~135°) pour bien sortir du piège
             double angle = 3.0 * Math.PI / 4.0; // 135°
-            turnByAngle(angle, vel / 2.0f, turnRight);
+            turnByAngle(angle, vel / 4.0f, turnRight);
 
             return;
         }
@@ -1879,7 +1874,8 @@ public class Controller {
 
             // Rotation moyenne (~60°) pour contourner l'obstacle sans faire un demi-tour
             double angle = Math.PI / 3.0; // 60°
-            turnByAngle(angle, vel / 2.0f, turnRight);
+            turnByAngle(angle, vel / 4.0f, turnRight);
+            move(vel * 0.6f, 400);
 
             return;
         }
