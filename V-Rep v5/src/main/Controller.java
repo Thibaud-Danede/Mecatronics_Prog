@@ -804,12 +804,10 @@ public class Controller {
 
     // Distance à partir de laquelle Avoid s'active (mètres)
     // À CHOISIR plus petite que la distance mini que Clean garde aux murs.
-    private static final double AVOID_FRONT_DIST = 0.30;   // ex: 0.30 m
+    private static final double AVOID_FRONT_DIST = 0.10;   // ex: 0.30 m
 
     // Ne pas supprimer
     private double trackLastDistToTarget = Double.MAX_VALUE;
-
-
 
     // --- Waypoints pour la phase 1 du Track (GPS uniquement) ---
     // À REMPLACER par tes vraies coordonnées (en mètres, dans le repère du GPS Coppelia)
@@ -873,6 +871,16 @@ public class Controller {
 
     // --- FSM pour Clean (motif zigzag horizontal avec odométrie) ---
 
+    // --- DEBUG orientation Clean (non bloquant) ---
+    private boolean headingDebugHasLast = false;
+    private double  headingDebugLastX   = 0.0;
+    private double  headingDebugLastY   = 0.0;
+    private long    headingDebugLastTimeMs = 0;
+
+    // Période entre deux logs d'angle (en ms)
+    private static final long HEADING_DEBUG_PERIOD_MS = 1000; // 1 seconde
+
+
     // États du Clean
     private static final int CLEAN_STATE_ALIGN_FORWARD   = 0;
     private static final int CLEAN_STATE_ALIGN_TURN_R    = 1;
@@ -920,6 +928,17 @@ public class Controller {
 
     // Sens actuel de la ligne horizontale : true = on va vers +Y, false = vers -Y
     private boolean cleanRowDirPositiveY = true;
+
+    // Suivi de la trajectoire réelle pour corriger l'orientation pendant une bande
+    private boolean cleanHasLastPos = false;
+    private double  cleanLastX = 0.0;
+    private double  cleanLastY = 0.0;
+
+    // Gain de correction de cap pendant les grandes bandes
+    private static final double CLEAN_HEADING_KP = 0.8;                 // plus grand = correction plus agressive
+    private static final double CLEAN_HEADING_ERR_DEADBAND_RAD =
+            Math.toRadians(2.0);                                        // zone morte ~2°
+
 
     private static final int CLEAN_STEP_TIME_MS = 150; // durée d’un “pas” en ligne droite
 
@@ -1334,6 +1353,7 @@ public class Controller {
 
             // 4) Début d'une nouvelle ligne horizontale
             case CLEAN_STATE_ZIG_ROW_START: {
+                headingDebugHasLast = false; // reset du suivi d'angle pour cette nouvelle bande
                 // Vérifier si on a encore de la place en X pour une nouvelle bande
                 if (x <= CLEAN_X_MIN_SAFE || cleanStripIndex >= CLEAN_MAX_STRIPS) {
                     System.out.println("[CLEAN] Toutes les bandes effectuées ou limite X atteinte -> CLEAN terminé.");
@@ -1344,6 +1364,10 @@ public class Controller {
 
                 cleanResetSegmentOdo();
                 cleanSegmentStarted = true;
+
+                // On va démarrer une nouvelle bande : on réinitialise le point de référence pour la correction
+                cleanHasLastPos = false;
+
                 cleanState = CLEAN_STATE_ZIG_ROW_RUN;
                 break;
             }
@@ -1368,9 +1392,14 @@ public class Controller {
                     // grâce aux rotations précédentes.
                     // On avance donc TOUJOURS vers l'avant (vitesse positive).
                     move(vel * 0.8f, CLEAN_STEP_TIME_MS);
+                    // DEBUG ORIENTATION EN TEMPS RÉEL (non bloquant)
+                    debugLogHeadingRealtime();
                 } else {
                     cleanSegmentStarted = false;
                     cleanState = CLEAN_STATE_ZIG_UTURN_1;
+
+                    // On peut réinitialiser le debug pour la prochaine bande si tu veux
+                    headingDebugHasLast = false;
                 }
                 break;
             }
@@ -1485,6 +1514,68 @@ public class Controller {
                 || cleanState == CLEAN_STATE_ALIGN_GO_EAST
                 || cleanState == CLEAN_STATE_ALIGN_TURN_180;
     }
+
+    // Mesure et log en continu l'orientation du robot à partir du déplacement GPS.
+// Convention : 0° = vers +Y, 90° = vers +X.
+// Non bloquant : à appeler souvent (ex: à chaque clean() sur les bandes Y).
+    private void debugLogHeadingRealtime() {
+
+        long now = System.currentTimeMillis();
+
+        // Première fois : on mémorise un point et on attend
+        if (!headingDebugHasLast) {
+            headingDebugLastX = getGPSX();
+            headingDebugLastY = getGPSY();
+            headingDebugLastTimeMs = now;
+            headingDebugHasLast = true;
+            return;
+        }
+
+        // On n'affiche qu'une fois par période (ex: 1 s)
+        if (now - headingDebugLastTimeMs < HEADING_DEBUG_PERIOD_MS) {
+            return;
+        }
+
+        double x = getGPSX();
+        double y = getGPSY();
+
+        double dx = x - headingDebugLastX;
+        double dy = y - headingDebugLastY;
+
+        double dist2 = dx * dx + dy * dy;
+
+        // Si on n'a presque pas bougé, angle peu fiable -> on skip
+        if (dist2 < 0.0004) { // ~2 cm²
+            headingDebugLastTimeMs = now; // on met quand même à jour le temps
+            return;
+        }
+
+        // Convention demandée :
+        //  - 0°  quand on va vers +Y
+        //  - 90° quand on va vers +X
+        //
+        // Avec atan2, si on veut 0° sur +Y, on utilise atan2(dx, dy)
+        double angleRad = Math.atan2(dx, dy);
+        double angleDeg = Math.toDegrees(angleRad);
+
+        // Normalisation dans [-180°, 180°] (plus lisible)
+        if (angleDeg > 180.0)  angleDeg -= 360.0;
+        if (angleDeg <= -180.0) angleDeg += 360.0;
+
+        double dist = Math.sqrt(dist2);
+
+        System.out.printf(
+                "[HEADING DEBUG] Angle ≈ %.1f° (0° = +Y, 90° = +X), pos=(%.3f, %.3f), Δ=%.1f cm%n",
+                angleDeg, x, y, dist * 100.0
+        );
+
+        // On met à jour le point de référence pour la prochaine mesure
+        headingDebugLastX = x;
+        headingDebugLastY = y;
+        headingDebugLastTimeMs = now;
+    }
+
+
 
 
     //======================================================
