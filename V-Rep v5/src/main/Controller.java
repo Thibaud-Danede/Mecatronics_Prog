@@ -923,6 +923,7 @@ public class Controller {
 
     // --- FSM pour Clean (motif zigzag horizontal avec odométrie) ---
 
+
     // --- Suivi du cap pendant les bandes Y ---
     private boolean cleanHeadingHasLastSample = false;
     private double  cleanHeadingLastX = 0.0;
@@ -972,6 +973,13 @@ public class Controller {
     private static final int CLEAN_STATE_DONE            = 9;
 
     private int cleanState = CLEAN_STATE_ALIGN_TURN_R;
+
+
+    // Seuil de couverture à partir duquel on considère le nettoyage "ok"
+    private static final double CLEAN_COVERAGE_TARGET = 95.0;   // en pourcents
+    // Mémorise si le seuil 90% a déjà été atteint
+    private boolean cleanCoverageThresholdReached = false;
+
 
     // Longueur max d’une bande horizontale (odométrie) – on reste un peu en-deçà
     private static final double CLEAN_ROW_DIST_MAX   = 3.8;  // m
@@ -1265,6 +1273,30 @@ public class Controller {
         // Caméra : score [-1,1] -> [0,1]
         double camNorm = clamp01((cam + 1.0) / 2.0);
 
+        // ---------- Couverture : décide si le nettoyage est "suffisant" ----------
+        double coveragePercent = getCoveragePercentEstimate();
+
+        // Critère 1 : motif Clean terminé géométriquement (coin Xmin / Ymax ou max strips)
+        boolean cleaningDoneGeom = (cleanState == CLEAN_STATE_DONE);
+
+        // Critère 2 : couverture ≥ CLEAN_COVERAGE_TARGET (par ex. 90%)
+        if (!cleanCoverageThresholdReached && coveragePercent >= CLEAN_COVERAGE_TARGET) {
+            cleanCoverageThresholdReached = true;
+
+            // On force aussi l'état Clean comme "terminé", pour éviter de relancer un motif
+            if (cleanState != CLEAN_STATE_DONE) {
+                System.out.printf(
+                        "[CLEAN] Seuil de couverture atteint: %.1f %% ≥ %.1f %% -> nettoyage OK, passage en TRACK.%n",
+                        coveragePercent, CLEAN_COVERAGE_TARGET
+                );
+                cleanState = CLEAN_STATE_DONE;
+                setVel(0, 0);
+            }
+        }
+
+        boolean cleaningDone = cleaningDoneGeom || cleanCoverageThresholdReached;
+
+
         // ---------- Sonars pour Avoid : on ne regarde que les frontaux (2 et 3) ----------
 
         double[] ranges = getSonarRanges();
@@ -1305,6 +1337,13 @@ public class Controller {
         if (trackOverride) {
             trackActive = true;
         }
+
+        // Si le nettoyage est terminé (motif + coin bas-gauche OU couverture ≥ 90 %),
+        // on force aussi Track, indépendamment du niveau de batterie.
+        if (cleaningDone) {
+            trackActive = true;
+        }
+
 
         // ---------- Clean & Wander ----------
         // Clean = comportement de fond ; Wander = si bloqué
@@ -2495,6 +2534,30 @@ public class Controller {
         lastAsciiPrintMs = now;
         printAsciiCoverageMap();
     }
+
+    // Renvoie une estimation du pourcentage de couverture [0,100]
+// en utilisant la même logique que printAsciiCoverageMap().
+    private double getCoveragePercentEstimate() {
+
+        int covered = 0;
+        int total   = 0;
+
+        // On parcourt les lignes comme dans printAsciiCoverageMap :
+        //  - de haut en bas (gy = MAP_H - 2 .. 0)
+        //  - en ignorant la toute dernière ligne (MAP_H - 1)
+        for (int gy = MAP_H - 2; gy >= 0; gy--) {
+            for (int gx = 0; gx < MAP_W; gx++) {
+
+                if (coverageMap[gy][gx]) {
+                    covered++;
+                }
+                total++;
+            }
+        }
+
+        return (total > 0) ? (100.0 * covered / total) : 0.0;
+    }
+
 
     // Affiche la carte ASCII + stats de couverture
     private void printAsciiCoverageMap() {
