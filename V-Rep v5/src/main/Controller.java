@@ -841,6 +841,16 @@ public class Controller {
 
 
 
+    // --- Heading pour Track P1 (full GPS, sans odométrie) ---
+    private boolean trackHeadingHasLastSample = false;
+    private double  trackHeadingLastX         = 0.0;
+    private double  trackHeadingLastY         = 0.0;
+    private double  trackHeadingRad           = 0.0; // 0 = +Y, 90° = +X
+    private long    trackLastHeadingCorrTimeMs = 0L;
+
+    private static final double TRACK_HEADING_SAMPLE_MIN_DIST   = 0.03;  // 3 cm
+    private static final int    TRACK_HEADING_CORR_PERIOD_MS    = 200;   // ms
+    private static final double TRACK_HEADING_DEADBAND_DEG      = 8.0;   // bande morte en deg
 
 
     // Distance à partir de laquelle Avoid s'active (mètres)
@@ -1814,7 +1824,7 @@ public class Controller {
     /// On ignore les waypoints : la cible est toujours (dockX, dockY).
     private void trackReturnToDockWithWaypoints(double x, double y, double distToDock)
     {
-        // 0) Si le robot est considéré comme bloqué, on laisse Wander essayer de le débloquer.
+        // 0) Si bloqué -> Wander
         if (isStuck()) {
             System.out.println("[TRACK P1] Robot bloqué -> appel Wander.");
             wander();
@@ -1830,56 +1840,74 @@ public class Controller {
         double dy = targetY - y;
         double distToTarget = Math.sqrt(dx * dx + dy * dy);
 
-        // Sécurité : si on est déjà "près" (normalement track() passera en phase 2)
         if (distToTarget < TRACK_NEAR_DIST) {
             System.out.println(String.format(
-                    "[TRACK P1] Déjà proche du dock (%.2f m) -> pas de mouvement (phase 2 va prendre la main).",
+                    "[TRACK P1] Déjà proche du dock (%.2f m) -> phase 2 prendra la main.",
                     distToTarget
             ));
             setVel(0, 0);
             return;
         }
 
-        // 3) Angle absolu vers le dock
-        double desiredHeading = Math.atan2(dy, dx);  // [-pi, +pi]
+        // 3) Mettre à jour le heading GPS courant (comme CLEAN)
+        updateTrackHeadingEstimate();
 
-        // 4) Erreur d'angle entre où on regarde (odoTheta) et où est le dock
-        double headingError = normalizeAngle(desiredHeading - odoTheta);
+        // Si on n'a pas encore d'estimation de cap fiable, on avance un peu pour en avoir une
+        if (!trackHeadingHasLastSample) {
+            System.out.println("[TRACK P1] Pas encore de heading GPS fiable -> petit pas en avant.");
+            move(vel * 0.6f, 200);
+            return;
+        }
 
-        // 5) Seuils / vitesses
-        final double ANGLE_TOL = Math.toRadians(10.0);  // tolérance de 10°
-        float turnVel  = vel / 2.0f;    // vitesse de rotation
-        int   turnTime = 200;          // durée d'une impulsion de rotation (ms)
-        float fwdVel   = vel * 0.8f;   // vitesse d'avance
-        int   moveTime = 200;          // durée d'une impulsion d'avance (ms)
+        // 4) Angle vers le dock (même repère GPS : 0 = +Y, 90° = +X)
+        double desiredHeading = Math.atan2(dx, dy);
 
-        // 6) Log de debug (très utile au début)
+        // 5) Erreur de cap
+        double headingError = normalizeAngle(desiredHeading - trackHeadingRad);
+
+        double angleTolDeg = (distToTarget > 2.0) ? 20.0 : 10.0;
+        final double ANGLE_TOL = Math.toRadians(angleTolDeg);
+
+        float turnVel  = vel / 2.5f;
+        int   turnTime = 180;
+        float fwdVel   = vel * 0.8f;
+        int   moveTime = 220;
+
+        long now = System.currentTimeMillis();
+        boolean timeForCorrection =
+                (now - trackLastHeadingCorrTimeMs) >= TRACK_HEADING_CORR_PERIOD_MS;
+
         System.out.println(String.format(
-                "[TRACK P1] pos=(%.2f, %.2f) dock=(%.2f, %.2f) dist=%.2f  theta=%.2f rad  err=%.2f rad",
-                x, y, targetX, targetY, distToTarget, odoTheta, headingError
+                "[TRACK P1] pos=(%.2f, %.2f) dock=(%.2f, %.2f) dist=%.2f  headingNow=%.2f rad  desired=%.2f rad  err=%.2f rad",
+                x, y, targetX, targetY, distToTarget, trackHeadingRad, desiredHeading, headingError
         ));
 
-        // 7) Décision : tourner ou avancer
-        if (Math.abs(headingError) > ANGLE_TOL) {
-            // On doit corriger l'orientation avant d'avancer.
+        if (timeForCorrection && Math.abs(headingError) > ANGLE_TOL) {
+            double headingDeg = Math.toDegrees(trackHeadingRad);
+            double errDeg     = Math.toDegrees(headingError);
 
+            System.out.printf(
+                    "[TRACK P1 CORR] heading=%.1f°, target=%.1f°, err=%.1f°%n",
+                    headingDeg, Math.toDegrees(desiredHeading), errDeg
+            );
+
+            // Même logique que CLEAN : on travaille dans le repère GPS,
+            // pas le repère odoTheta.
             if (headingError > 0) {
-                // Dock à "gauche" -> on veut AUGMENTER l'angle -> tourner sur place dans ce sens
-                System.out.println("[TRACK P1] Dock à gauche -> rotation gauche.");
-                // NB : turnSpot(vel) fait décroître l'angle (voir updateOdometry),
-                // donc pour augmenter l'angle on utilise -turnVel.
-                turnSpot(-turnVel, turnTime);
-            } else {
-                // Dock à "droite" -> on veut DIMINUER l'angle
-                System.out.println("[TRACK P1] Dock à droite -> rotation droite.");
+                // le dock est "à gauche" -> on augmente l'angle
                 turnSpot(turnVel, turnTime);
+            } else {
+                // le dock est "à droite" -> on diminue l'angle
+                turnSpot(-turnVel, turnTime);
             }
+
+            trackLastHeadingCorrTimeMs = now;
         } else {
-            // Orientation correcte -> on avance vers le dock
-            System.out.println("[TRACK P1] Orientation OK -> avancer vers le dock.");
+            System.out.println("[TRACK P1] Orientation OK (ou pas de correction nécessaire) -> avancer vers le dock.");
             move(fwdVel, moveTime);
         }
     }
+
 
 
     // Phase 2 du Track : caméra uniquement, pour orientation + petits pas vers le dock
@@ -2039,6 +2067,48 @@ public class Controller {
             }
         }
     }
+
+    // Met à jour trackHeadingRad en fonction du déplacement GPS depuis le dernier échantillon.
+// Convention : 0 rad = +Y, 90° = +X  => atan2(dx, dy)
+    private void updateTrackHeadingEstimate() {
+
+        double x = getGPSX();
+        double y = getGPSY();
+
+        if (!trackHeadingHasLastSample) {
+            trackHeadingLastX = x;
+            trackHeadingLastY = y;
+            trackHeadingHasLastSample = true;
+            return;
+        }
+
+        double dx   = x - trackHeadingLastX;
+        double dy   = y - trackHeadingLastY;
+        double dist = Math.sqrt(dx * dx + dy * dy);
+
+        // si on n'a presque pas bougé, ne pas changer le heading
+        if (dist < TRACK_HEADING_SAMPLE_MIN_DIST) {
+            return;
+        }
+
+        // 0° = +Y, 90° = +X
+        double angleRad = Math.atan2(dx, dy);
+        trackHeadingRad = angleRad;
+
+        double angleDeg = Math.toDegrees(angleRad);
+        if (angleDeg > 180.0)  angleDeg -= 360.0;
+        if (angleDeg <= -180.0) angleDeg += 360.0;
+
+        System.out.printf(
+                "[TRACK P1 HEADING] angle ≈ %.1f° (0° = +Y, 90° = +X), pos=(%.3f, %.3f), Δ=%.1f cm%n",
+                angleDeg, x, y, dist * 100.0
+        );
+
+        trackHeadingLastX = x;
+        trackHeadingLastY = y;
+    }
+
+
 
     //======================================================
     // 5. Comportement AVOID
