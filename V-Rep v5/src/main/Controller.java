@@ -802,30 +802,38 @@ public class Controller {
      *                                                   Student Code                                                   *
      ********************************************************************************************************************/
 
-    // <----- Carte ASCI ----->
+    //------------------------------------------------------
+    // Géométrie de la pièce & zones sûres
+    //------------------------------------------------------
 
-    // --- Géométrie de la pièce (approx) + marge de sécurité ---
+    // Limites approximatives de la pièce (repère GPS)
     private static final double ROOM_X_MAX   =  2.18;
     private static final double ROOM_X_MIN   = -2.18;
     private static final double ROOM_Y_MAX   =  2.21;
     private static final double ROOM_Y_MIN   = -2.16;
 
-    private static final double CLEAN_MARGIN = 0.20; // distance sécurité murs
+    // Marge de sécurité par rapport aux murs
+    private static final double CLEAN_MARGIN = 0.20;  // m
 
-    private static final double CLEAN_X_MAX_SAFE = ROOM_X_MAX - CLEAN_MARGIN; //
-    private static final double CLEAN_X_MIN_SAFE = ROOM_X_MIN + CLEAN_MARGIN; //
-    private static final double CLEAN_Y_MAX_SAFE = ROOM_Y_MAX - CLEAN_MARGIN; //
-    private static final double CLEAN_Y_MIN_SAFE = ROOM_Y_MIN + CLEAN_MARGIN; //
+    // Zone "safe" pour le nettoyage (on évite de coller les murs)
+    private static final double CLEAN_X_MAX_SAFE = ROOM_X_MAX - CLEAN_MARGIN;
+    private static final double CLEAN_X_MIN_SAFE = ROOM_X_MIN + CLEAN_MARGIN;
+    private static final double CLEAN_Y_MAX_SAFE = ROOM_Y_MAX - CLEAN_MARGIN;
+    private static final double CLEAN_Y_MIN_SAFE = ROOM_Y_MIN + CLEAN_MARGIN;
 
-    // --- Carte ASCII de couverture ---
-// Résolution de la grille (taille d'une cellule en mètres)
-// Plus c'est grand, plus la carte est grossière
+
+    //------------------------------------------------------
+    // Carte ASCII de couverture
+    //------------------------------------------------------
+
+    // Résolution de la grille (taille d'une cellule en mètres)
+    // Plus MAP_RES est grand, plus la carte est grossière
     private static final double MAP_RES = 0.15;
 
-    // Si true : on applique une rotation de 90° anti-horaire pour afficher la carte
+    // Si true : rotation de 90° anti-horaire de la vue pour l'affichage ASCII
     private static final boolean MAP_ROTATE_90_CCW = true;
 
-    // Dimensions de la grille, dérivées de la taille de la pièce
+    // Dimensions de la grille dérivées de la taille de la pièce
     private static final int MAP_W = (int) Math.ceil((ROOM_X_MAX - ROOM_X_MIN) / MAP_RES);
     private static final int MAP_H = (int) Math.ceil((ROOM_Y_MAX - ROOM_Y_MIN) / MAP_RES);
 
@@ -839,128 +847,91 @@ public class Controller {
     private long lastAsciiPrintMs = 0L;
 
 
-
-
-    // --- Heading pour Track P1 (full GPS, sans odométrie) ---
-    private boolean trackHeadingHasLastSample = false;
-    private double  trackHeadingLastX         = 0.0;
-    private double  trackHeadingLastY         = 0.0;
-    private double  trackHeadingRad           = 0.0; // 0 = +Y, 90° = +X
-    private long    trackLastHeadingCorrTimeMs = 0L;
-
-    private static final double TRACK_HEADING_SAMPLE_MIN_DIST   = 0.03;  // 3 cm
-    private static final int    TRACK_HEADING_CORR_PERIOD_MS    = 200;   // ms
-    private static final double TRACK_HEADING_DEADBAND_DEG      = 8.0;   // bande morte en deg
-
-
-    // Distance à partir de laquelle Avoid s'active (mètres)
-    // À CHOISIR plus petite que la distance mini que Clean garde aux murs.
-    private static final double AVOID_FRONT_DIST = 0.10;   // ex: 0.30 m
-
-    // Ne pas supprimer
-    private double trackLastDistToTarget = Double.MAX_VALUE;
-
-    // --- Waypoints pour la phase 1 du Track (GPS uniquement) ---
-    // À REMPLACER par tes vraies coordonnées (en mètres, dans le repère du GPS Coppelia)
-    private static final double[][] TRACK_WAYPOINTS = {
-            { CHARGER_XCOORD, CHARGER_YCOORD }  // un seul waypoint : le dock
-    };
-
-
-    private static final double WP_REACHED_DIST = 0.25; // rayon pour considérer un WP atteint
-
-
-    // Indique si on est actuellement en phase 2 du track (approche dock)
-    private boolean inTrackPhase2 = false;
-
-
-    // Indique si on considère que le robot est bien docké
-    private boolean trackDocked = false;
-
-
-    // --- Odométrie simple avec les encodeurs ---
-    private boolean odoInit = false;
-    private double lastLeftEnc  = 0.0;
-    private double lastRightEnc = 0.0;
-    private double odoTheta     = 0.0; // orientation estimée (rad)
+    //------------------------------------------------------
+    // Paramètres mécaniques & odométrie
+    //------------------------------------------------------
 
     // Paramètres mécaniques approximatifs du Roomba
-    private static final double WHEEL_RADIUS = 0.04; // ~3.5 cm
-    private static final double WHEEL_BASE   = 0.23;  // ~27 cm entre les roues
-    private static final double TURN_CALIB = 1.00;  // à ajuster en simulation
+    private static final double WHEEL_RADIUS = 0.04;  // m (≈ 4 cm)
+    private static final double WHEEL_BASE   = 0.23;  // m (≈ 23 cm entre les roues)
+    private static final double TURN_CALIB   = 1.00;  // facteur de calibration rotation
+
+    // Odométrie simple sur les encodeurs
+    private boolean odoInit      = false;
+    private double  lastLeftEnc  = 0.0;
+    private double  lastRightEnc = 0.0;
+    private double  odoTheta     = 0.0;  // orientation estimée (rad)
 
 
-    // --- Position de la station de charge (dock) ---
+    //------------------------------------------------------
+    // Docking / Track – état global
+    //------------------------------------------------------
+
+    // Position de la station de charge (dock)
     private boolean dockPositionInitialized = true;
-    private double dockX = CHARGER_XCOORD;  // valeur de secours
-    private double dockY = CHARGER_YCOORD;  // valeur de secours
+    private double  dockX = CHARGER_XCOORD;  // valeur de secours
+    private double  dockY = CHARGER_YCOORD;  // valeur de secours
 
-    // Seuils pour le comportement Track
-    // Au-delà de TRACK_NEAR_DIST : on est "loin" → phase GPS
-    // En dessous de TRACK_NEAR_DIST : on est dans la zone de docking → phase caméra
-    // En dessous de TRACK_DOCKED_DIST : on considère qu'on est docké
-    private static final double TRACK_NEAR_DIST   = 0.35;   // m
-    private static final double TRACK_DOCKED_DIST = 0.20;  // m
-    // Par exemple, 8 cm de marge en plus
-    private static final double TRACK_DOCKED_MARGIN = 0.08;
+    // Seuils de distance pour le comportement Track
+    // - dist > TRACK_NEAR_DIST   : phase 1 (GPS)
+    // - dist <= TRACK_NEAR_DIST  : phase 2 (caméra)
+    // - dist <= TRACK_DOCKED_DIST: considéré docké
+    private static final double TRACK_NEAR_DIST     = 0.35;  // m
+    private static final double TRACK_DOCKED_DIST   = 0.20;  // m
+    private static final double TRACK_DOCKED_MARGIN = 0.08;  // m de marge supplémentaire
+
+    // Indique si on est actuellement en phase 2 du Track (approche caméra)
+    private boolean inTrackPhase2 = false;
+
+    // Indique si l'on considère que le robot est docké
+    private boolean trackDocked = false;
 
     // Pour vérifier que la pose de docking reste bonne sur une courte durée
-    private long dockStableSinceMs = 0;
+    private long dockStableSinceMs = 0L;
 
     // Détection de blocage spécifique à la phase 2 du Track (caméra)
-    private long trackP2StuckSinceMs = 0;
-    private long trackP2LastSpinMs   = 0;
+    private long trackP2StuckSinceMs = 0L;
+    private long trackP2LastSpinMs   = 0L;
 
     // Pour savoir si on a déjà fait le scan initial en phase 2
     private boolean trackP2InitialScanDone = false;
 
-    // Pour n'appliquer l'override de batterie qu'une seule fois
-    private boolean batteryDevOverrideDone = false;
-
     // Log batterie périodique
-    private long lastBatteryLogTimeMs = 0;
+    private long lastBatteryLogTimeMs = 0L;
 
 
-    // --- FSM pour Clean (motif zigzag horizontal avec odométrie) ---
+    //------------------------------------------------------
+    // Track P1 – estimation de cap (full GPS)
+    //------------------------------------------------------
+
+    // Suivi du heading pendant Track P1 (uniquement via GPS)
+    private boolean trackHeadingHasLastSample   = false;
+    private double  trackHeadingLastX           = 0.0;
+    private double  trackHeadingLastY           = 0.0;
+    private double  trackHeadingRad             = 0.0;  // 0 = +Y, 90° = +X
+    private long    trackLastHeadingCorrTimeMs  = 0L;
+
+    // Distance mini entre deux échantillons GPS pour mettre à jour le heading
+    private static final double TRACK_HEADING_SAMPLE_MIN_DIST = 0.03;  // 3 cm
+
+    // Période minimale entre deux corrections de heading (Track P1)
+    private static final int TRACK_HEADING_CORR_PERIOD_MS = 200;       // ms
 
 
-    // --- Suivi du cap pendant les bandes Y ---
-    private boolean cleanHeadingHasLastSample = false;
-    private double  cleanHeadingLastX = 0.0;
-    private double  cleanHeadingLastY = 0.0;
+    //------------------------------------------------------
+    // Avoid – paramètres
+    //------------------------------------------------------
 
-    // cap courant en radians (0 = +Y, 90° = +X)
-    private double  cleanHeadingRad = 0.0;
-
-    // distance minimale entre deux échantillons GPS pour mettre à jour le cap
-    private static final double CLEAN_HEADING_SAMPLE_MIN_DIST = 0.08; // 8 cm
-
-    // paramètres de correction
-    private static final double CLEAN_HEADING_DEADBAND_DEG = 3.0;  // zone morte ±3°
-    private static final double CLEAN_HEADING_KP = 2.0;            // plus grand = correction plus forte
-
-    // fréquence de correction
-    private static final long CLEAN_HEADING_CORR_PERIOD_MS = 400;  // 0,4 s entre deux corrections
-    private long cleanLastHeadingCorrTimeMs = 0L;
-
-    private long    cleanHeadingLastTimeMs = 0L;
-
-    // Seuils pour l'update du heading
-    private static final long   CLEAN_HEADING_MIN_DT_MS   = 80;   // min ~0.08s entre deux updates
-    private static final double CLEAN_HEADING_MIN_DIST    = 0.02; // min ~2 cm entre deux points
+    // Distance à partir de laquelle Avoid s'active (mètres).
+    // Doit être plus petite que la distance minimale que Clean garde aux murs.
+    private static final double AVOID_FRONT_DIST = 0.10;    // m
 
 
-    // --- DEBUG orientation Clean (non bloquant) ---
-    private boolean headingDebugHasLast = false;
-    private double  headingDebugLastX   = 0.0;
-    private double  headingDebugLastY   = 0.0;
-    private long    headingDebugLastTimeMs = 0;
+    //------------------------------------------------------
+    // Clean – FSM & paramètres
+    //------------------------------------------------------
 
-    // Période entre deux logs d'angle (en ms)
-    private static final long HEADING_DEBUG_PERIOD_MS = 1000; // 1 seconde
-
-
-    // États du Clean
+    // États du Clean (motif zigzag)
     private static final int CLEAN_STATE_ALIGN_FORWARD   = 0;
     private static final int CLEAN_STATE_ALIGN_TURN_R    = 1;
     private static final int CLEAN_STATE_ALIGN_GO_EAST   = 2;
@@ -972,76 +943,91 @@ public class Controller {
     private static final int CLEAN_STATE_ZIG_UTURN_2     = 8;
     private static final int CLEAN_STATE_DONE            = 9;
 
+    // État courant du Clean
     private int cleanState = CLEAN_STATE_ALIGN_TURN_R;
 
-
     // Seuil de couverture à partir duquel on considère le nettoyage "ok"
-    private static final double CLEAN_COVERAGE_TARGET = 95.0;   // en pourcents
-    // Mémorise si le seuil 90% a déjà été atteint
+    private static final double CLEAN_COVERAGE_TARGET = 95.0;  // en %
+
+    // Flag : vrai si le seuil de couverture a été atteint au moins une fois
     private boolean cleanCoverageThresholdReached = false;
 
+    // Longueur maximale d’une bande (odométrie) – on reste un peu en-deçà
+    private static final double CLEAN_ROW_DIST_MAX = 3.8;   // m
 
-    // Longueur max d’une bande horizontale (odométrie) – on reste un peu en-deçà
-    private static final double CLEAN_ROW_DIST_MAX   = 3.8;  // m
     // Décalage en X entre deux bandes
-    private static final double CLEAN_STRIP_STEP     = 0.35; // m
-    // Distance initiale en +X pour s’avancer légèrement au départ
-    private static final double CLEAN_ALIGN_FWD_DIST = 0.25; // m
-    // Distance max pour l’alignement vers le mur EST (sécurité)
-    private static final double CLEAN_ALIGN_GO_EAST_MAX_DIST = 3.0; // m
+    private static final double CLEAN_STRIP_STEP = 0.35;    // m
 
-    // Limite de nombre de bandes
+    // Distance max pour l’alignement vers le mur EST (sécurité)
+    private static final double CLEAN_ALIGN_GO_EAST_MAX_DIST = 3.0;  // m
+
+    // Limite du nombre de bandes
     private static final int CLEAN_MAX_STRIPS = 12;
     private int cleanStripIndex = 0;
 
     // Odométrie locale d’un segment (ligne ou décalage)
-    private double cleanStartLeftEnc  = 0.0;
-    private double cleanStartRightEnc = 0.0;
+    private double  cleanStartLeftEnc   = 0.0;
+    private double  cleanStartRightEnc  = 0.0;
     private boolean cleanSegmentStarted = false;
 
-    // Sens actuel de la ligne horizontale : true = on va vers +Y, false = vers -Y
+    // Sens actuel de la ligne horizontale :
+    // true  -> on va vers +Y
+    // false -> on va vers -Y
     private boolean cleanRowDirPositiveY = true;
 
-    // Suivi de la trajectoire réelle pour corriger l'orientation pendant une bande
-    private boolean cleanHasLastPos = false;
-    private double  cleanLastX = 0.0;
-    private double  cleanLastY = 0.0;
+    // Suivi du cap pendant les bandes Y (via GPS)
+    private boolean cleanHeadingHasLastSample = false;
+    private double  cleanHeadingLastX         = 0.0;
+    private double  cleanHeadingLastY         = 0.0;
+    private double  cleanHeadingRad           = 0.0;  // 0 = +Y, 90° = +X
 
-    // Gain de correction de cap pendant les grandes bandes
-    private static final double CLEAN_HEADING_ERR_DEADBAND_RAD =
-            Math.toRadians(2.0);                                        // zone morte ~2°
+    // Distance minimale entre deux échantillons GPS pour mettre à jour le cap
+    private static final double CLEAN_HEADING_SAMPLE_MIN_DIST = 0.08;  // 8 cm
+
+    // Zone morte pour la correction d'angle (en degrés)
+    private static final double CLEAN_HEADING_DEADBAND_DEG = 3.0;      // ±3°
+
+    // Période entre deux corrections de heading
+    private static final long CLEAN_HEADING_CORR_PERIOD_MS = 400L;     // ms
+    private long cleanLastHeadingCorrTimeMs = 0L;
+
+    // Dernière position connue sur la bande (optionnel – pour debug/extension)
+    private double cleanLastX = 0.0;
+    private double cleanLastY = 0.0;
+
+    // Durée d’un “pas” en ligne droite lors du Clean
+    private static final int CLEAN_STEP_TIME_MS = 150;                 // ms
 
 
-    private static final int CLEAN_STEP_TIME_MS = 150; // durée d’un “pas” en ligne droite
-
-    // --- Stubs pour éviter les erreurs si le FXML appelle ces méthodes
-    //     (ne dépendent d’aucune variable externe ; sans effet si le bouton n’existe pas) ---
-    //
+    //------------------------------------------------------
     // Détection de blocage (stuck)
-    private double lastStuckCheckX = 0.0;
-    private double lastStuckCheckY = 0.0;
-    private long   lastStuckCheckTimeMs = 0;
-    private int    stuckCounter = 0;
+    //------------------------------------------------------
+
+    private double lastStuckCheckX      = 0.0;
+    private double lastStuckCheckY      = 0.0;
+    private long   lastStuckCheckTimeMs = 0L;
+    private int    stuckCounter         = 0;
 
 
+    //------------------------------------------------------
+    // Modes & comportements (subsomption)
+    //------------------------------------------------------
 
-    // --- MODES (utiles pour le cycle MANU → ROUTE → AUTO) ---
-    private static final int MODE_AUTO  = 0;
-    private static final int MODE_MANU  = 1;
+    // Modes de fonctionnement
+    private static final int MODE_AUTO = 0;
+    private static final int MODE_MANU = 1;
 
-    // --- IDs de comportements (pour le debug) ---
+    // IDs de comportements (pour debug)
     private static final int BEH_NONE   = 0;
     private static final int BEH_AVOID  = 1;
     private static final int BEH_TRACK  = 2;
     private static final int BEH_CLEAN  = 3;
     private static final int BEH_WANDER = 4;
 
-    // Comportement actuellement actif (pour détecter les changements)
+    // Comportement actuellement actif
     private int currentBehavior = BEH_NONE;
 
-    // État courant du mode. Tu peux choisir le démarrage que tu veux.
-    // Pour coller au label initial du FXML ("Mode: AUTO"), mets MODE_AUTO.
-    // Si tu préfères démarrer MANU, mets MODE_MANU.
+    // Mode courant (AUTO par défaut pour coller au FXML)
     private int mode = MODE_AUTO;
 
     @FXML private Button btnMode; // si déjà déclaré ailleurs, supprime cette ligne
@@ -1104,26 +1090,7 @@ public class Controller {
      * Notes      : Comment where appropriate.
      **/
     public void update() {
-        // Read from image test:
-//    int x = getImageWidth()/2;
-//    int y = getImageHeight()/2;
-//    System.out.println("pixel[" + x + "," + y + "]: " + getImagePixel(x, y));
-//    System.out.println("target[" + getTargetX() + "," + getTargetY() + "]: " + getTargetMaxScore());
-
-        // Write on image test:
-//    for(x=0 ; x<(getImageWidth()/3)  ; x++)
-//    for(y=0 ; y<(getImageHeight()/3) ; y++)
-//    setImagePixel(x, y, 128);
-//    displayImage();
-
-        // Template matching:
         templateMatchingCV(getImage());
-
-        // Print sensors test:
-//    System.out.println("\nWheel(R): " + getRightWheelEnc() + ", Wheel(L): " + getLeftWheelEnc()); // Wheel revolutions.
-//    System.out.println("GPS(X): " + getGPSX() + ", GPS(Y): " + getGPSY() + ", GPS(Z): " + getGPSZ()); // GPS coordinates.
-//    System.out.println("C: " + getBatteryCapacity() + "v, P: " + getBatteryPercentage() + "%, S: " + getBatteryState() + ", T: " + getBatteryTime() + "sec"); // Battery stats.
-//    for(int i=0 ; i<getSonarNo() ; i++) System.out.println(i + ": " + Utils.getDecimal(getSonarRange(i), "0.0")); // Print ultrasonic ranges.
     }
 
     /**
@@ -1184,9 +1151,6 @@ public class Controller {
 //            System.out.println("[BATT] Override dev: batterie réglée sur 2 minutes.");
 //        }
 
-        Integer priority[] = new Integer[2];
-        //        int priority[] = new int[4];
-
         double cam = getTargetMaxScore();                                                      // Target horizontal detection (pixels).
         double bat = getBatteryCapacity();                                                     // Battery capacity (volts).
         double snr = Arrays.stream(getSonarRanges()).min().getAsDouble();                      // Min sonar range radius (meters).
@@ -1200,17 +1164,6 @@ public class Controller {
                 getGPSX(), getGPSY(),
                 dockXUsed, dockYUsed
         );
-        double sensors[] = new double[]{bat, snr, cam, gps};                                   // Sensor vector.
-
-        double sonarData[] = new double[]
-                {
-                        getSonarRange(0),
-                        getSonarRange(1),
-                        getSonarRange(2),
-                        getSonarRange(3),
-                        getSonarRange(4),
-                        getSonarRange(5)
-                };
 
         // --- Log batterie toutes les ~10 secondes ---
         long now = System.currentTimeMillis();
@@ -1466,7 +1419,6 @@ public class Controller {
             // 4) Début d'une nouvelle ligne horizontale
             case CLEAN_STATE_ZIG_ROW_START: {
                 // Reset du suivi d'angle (debug + contrôle) pour cette nouvelle bande
-                headingDebugHasLast        = false;
                 cleanHeadingHasLastSample  = false;
                 cleanLastHeadingCorrTimeMs = 0L;
 
@@ -1490,9 +1442,6 @@ public class Controller {
 
                 cleanResetSegmentOdo();
                 cleanSegmentStarted = true;
-
-                // (Optionnel: si tu avais un autre mécanisme de suivi de trajectoire)
-                cleanHasLastPos = false;
 
                 cleanState = CLEAN_STATE_ZIG_ROW_RUN;
                 break;
@@ -1636,66 +1585,6 @@ public class Controller {
                 || cleanState == CLEAN_STATE_ALIGN_TURN_R
                 || cleanState == CLEAN_STATE_ALIGN_GO_EAST
                 || cleanState == CLEAN_STATE_ALIGN_TURN_180;
-    }
-
-    // Mesure et log en continu l'orientation du robot à partir du déplacement GPS.
-// Convention : 0° = vers +Y, 90° = vers +X.
-// Non bloquant : à appeler souvent (ex: à chaque clean() sur les bandes Y).
-    private void debugLogHeadingRealtime() {
-
-        long now = System.currentTimeMillis();
-
-        // Première fois : on mémorise un point et on attend
-        if (!headingDebugHasLast) {
-            headingDebugLastX = getGPSX();
-            headingDebugLastY = getGPSY();
-            headingDebugLastTimeMs = now;
-            headingDebugHasLast = true;
-            return;
-        }
-
-        // On n'affiche qu'une fois par période (ex: 1 s)
-        if (now - headingDebugLastTimeMs < HEADING_DEBUG_PERIOD_MS) {
-            return;
-        }
-
-        double x = getGPSX();
-        double y = getGPSY();
-
-        double dx = x - headingDebugLastX;
-        double dy = y - headingDebugLastY;
-
-        double dist2 = dx * dx + dy * dy;
-
-        // Si on n'a presque pas bougé, angle peu fiable -> on skip
-        if (dist2 < 0.0004) { // ~2 cm²
-            headingDebugLastTimeMs = now; // on met quand même à jour le temps
-            return;
-        }
-
-        // Convention demandée :
-        //  - 0°  quand on va vers +Y
-        //  - 90° quand on va vers +X
-        //
-        // Avec atan2, si on veut 0° sur +Y, on utilise atan2(dx, dy)
-        double angleRad = Math.atan2(dx, dy);
-        double angleDeg = Math.toDegrees(angleRad);
-
-        // Normalisation dans [-180°, 180°] (plus lisible)
-        if (angleDeg > 180.0)  angleDeg -= 360.0;
-        if (angleDeg <= -180.0) angleDeg += 360.0;
-
-        double dist = Math.sqrt(dist2);
-
-        System.out.printf(
-                "[HEADING DEBUG] Angle ≈ %.1f° (0° = +Y, 90° = +X), pos=(%.3f, %.3f), Δ=%.1f cm%n",
-                angleDeg, x, y, dist * 100.0
-        );
-
-        // On met à jour le point de référence pour la prochaine mesure
-        headingDebugLastX = x;
-        headingDebugLastY = y;
-        headingDebugLastTimeMs = now;
     }
 
     // Met à jour l'estimation de l'angle du robot à partir de deux points GPS.
@@ -1848,7 +1737,6 @@ public class Controller {
 
             if (!wasInPhase2) {
                 System.out.println("[TRACK] Passage en phase 2 (caméra).");
-                trackLastDistToTarget   = Double.MAX_VALUE;
                 trackP2InitialScanDone  = false;
                 dockStableSinceMs       = 0;
                 trackP2StuckSinceMs     = 0L;
