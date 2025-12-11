@@ -802,18 +802,6 @@ public class Controller {
      *                                                   Student Code                                                   *
      ********************************************************************************************************************/
 
-
-
-
-
-
-
-
-//    private FSM avoid = new Avoid(3, 100);
-//    private FSM track  = new Track( 75, 3);
-//    private FSM clean  = new Clean( 50, 3);
-//    private FSM wander = new Wander(3, 25);
-
     // Distance à partir de laquelle Avoid s'active (mètres)
     // À CHOISIR plus petite que la distance mini que Clean garde aux murs.
     private static final double AVOID_FRONT_DIST = 0.30;   // ex: 0.30 m
@@ -848,8 +836,9 @@ public class Controller {
     private double odoTheta     = 0.0; // orientation estimée (rad)
 
     // Paramètres mécaniques approximatifs du Roomba
-    private static final double WHEEL_RADIUS = 0.033; // ~3.5 cm
-    private static final double WHEEL_BASE   = 0.30;  // ~27 cm entre les roues
+    private static final double WHEEL_RADIUS = 0.04; // ~3.5 cm
+    private static final double WHEEL_BASE   = 0.23;  // ~27 cm entre les roues
+    private static final double TURN_CALIB = 1.00;  // à ajuster en simulation
 
 
     // --- Position de la station de charge (dock) ---
@@ -876,26 +865,13 @@ public class Controller {
     // Pour savoir si on a déjà fait le scan initial en phase 2
     private boolean trackP2InitialScanDone = false;
 
-
-
-
-
     // Pour n'appliquer l'override de batterie qu'une seule fois
     private boolean batteryDevOverrideDone = false;
 
     // Log batterie périodique
     private long lastBatteryLogTimeMs = 0;
 
-
-
-
-
     // --- FSM pour Clean (motif zigzag horizontal avec odométrie) ---
-
-    // Facteur de calibration pour les rotations (odométrie)
-    // 1.0 = pas de correction
-    // < 1.0 si le robot tourne trop, > 1.0 s'il ne tourne pas assez.
-    private static final double TURN_CALIB = 0.719;  // à ajuster en simulation
 
     // États du Clean
     private static final int CLEAN_STATE_ALIGN_FORWARD   = 0;
@@ -947,10 +923,6 @@ public class Controller {
 
     private static final int CLEAN_STEP_TIME_MS = 150; // durée d’un “pas” en ligne droite
 
-
-
-
-
     // --- Stubs pour éviter les erreurs si le FXML appelle ces méthodes
     //     (ne dépendent d’aucune variable externe ; sans effet si le bouton n’existe pas) ---
     //
@@ -988,6 +960,9 @@ public class Controller {
     private boolean trackOverride = false;
 
 
+    //======================================================
+    // 1. UI ET MODES
+    //======================================================
     // Met à jour le libellé du bouton selon le mode courant
     private void updateModeUI() {
         if (btnMode == null) return;
@@ -1001,7 +976,6 @@ public class Controller {
         String label = trackOverride ? "TRACK forcé: ON" : "TRACK forcé: OFF";
         btnForceTrack.setText(label);
     }
-
 
     @FXML
     private void toggleMode() {
@@ -1028,7 +1002,274 @@ public class Controller {
         updateTrackOverrideUI();
     }
 
+    //======================================================
+    // 2. Boucle principale / coordination
+    //======================================================
+    /**
+     * Method     : Controller::update()
+     * Purpose    : To update custom code.
+     * Parameters : None.
+     * Returns    : Nothing.
+     * Notes      : Comment where appropriate.
+     **/
+    public void update() {
+        // Read from image test:
+//    int x = getImageWidth()/2;
+//    int y = getImageHeight()/2;
+//    System.out.println("pixel[" + x + "," + y + "]: " + getImagePixel(x, y));
+//    System.out.println("target[" + getTargetX() + "," + getTargetY() + "]: " + getTargetMaxScore());
 
+        // Write on image test:
+//    for(x=0 ; x<(getImageWidth()/3)  ; x++)
+//    for(y=0 ; y<(getImageHeight()/3) ; y++)
+//    setImagePixel(x, y, 128);
+//    displayImage();
+
+        // Template matching:
+        templateMatchingCV(getImage());
+
+        // Print sensors test:
+//    System.out.println("\nWheel(R): " + getRightWheelEnc() + ", Wheel(L): " + getLeftWheelEnc()); // Wheel revolutions.
+//    System.out.println("GPS(X): " + getGPSX() + ", GPS(Y): " + getGPSY() + ", GPS(Z): " + getGPSZ()); // GPS coordinates.
+//    System.out.println("C: " + getBatteryCapacity() + "v, P: " + getBatteryPercentage() + "%, S: " + getBatteryState() + ", T: " + getBatteryTime() + "sec"); // Battery stats.
+//    for(int i=0 ; i<getSonarNo() ; i++) System.out.println(i + ": " + Utils.getDecimal(getSonarRange(i), "0.0")); // Print ultrasonic ranges.
+    }
+
+    /**
+     * Method     : Controller::main()
+     * Purpose    : To run the main code.
+     * Parameters : None.
+     * Returns    : Nothing.
+     * Notes      : None.
+     **/
+    public void main()
+    {
+        run();
+    }
+
+    /**
+     * Method     : SubsumptionCoordinator::run()
+     * Purpose    : To run a custom Subsumption Architecture.
+     * Parameters : None.
+     * Returns    : Nothing.
+     * Notes      : None.
+     **/
+    public void run()
+    {
+        // 0) Si on est déjà docké, on coupe tout comportement automatique
+        if (trackDocked) {
+            // On s'assure que les moteurs sont bien à l'arrêt
+            setVel(0, 0);
+            dir = 's';
+
+            // Optionnel : on log une seule fois le passage en état "dock"
+            if (currentBehavior != BEH_NONE) {
+                System.out.println("[AUTO] Dock atteint -> arrêt définitif des comportements automatiques.");
+                currentBehavior = BEH_NONE;
+            }
+
+            // On ne fait plus AUCUNE décision auto tant que trackDocked reste true
+            return;
+        }
+
+        // Mise à jour de l'orientation estimée à partir des encodeurs
+        updateOdometry();
+
+        // 1) Initialiser la position de docking une seule fois au début
+        if (!dockPositionInitialized) {
+            // On connaît déjà la position fixe du dock dans la scène
+            dockX = CHARGER_XCOORD;   // 1.78
+            dockY = CHARGER_YCOORD;   // -0.78
+            dockPositionInitialized = true;
+
+            System.out.println("[DOCK] Position fixe de la station: X=" + dockX + "  Y=" + dockY);
+        }
+
+
+        // Override dev : batterie plus courte (ex: 2 minutes)
+//        if (!batteryDevOverrideDone) {
+//            setBatteryTime(2);  // 2 minutes au lieu de 20
+//            batteryDevOverrideDone = true;
+//            System.out.println("[BATT] Override dev: batterie réglée sur 2 minutes.");
+//        }
+
+        Integer priority[] = new Integer[2];
+        //        int priority[] = new int[4];
+
+        double cam = getTargetMaxScore();                                                      // Target horizontal detection (pixels).
+        double bat = getBatteryCapacity();                                                     // Battery capacity (volts).
+        double snr = Arrays.stream(getSonarRanges()).min().getAsDouble();                      // Min sonar range radius (meters).
+
+        // On utilise la position dynamique du dock si elle est connue,
+        // sinon on retombe sur les constantes d'origine.
+        double dockXUsed = dockPositionInitialized ? dockX : CHARGER_XCOORD;
+        double dockYUsed = dockPositionInitialized ? dockY : CHARGER_YCOORD;
+
+        double gps = Utils.getEuclidean(
+                getGPSX(), getGPSY(),
+                dockXUsed, dockYUsed
+        );
+        double sensors[] = new double[]{bat, snr, cam, gps};                                   // Sensor vector.
+
+        double sonarData[] = new double[]
+                {
+                        getSonarRange(0),
+                        getSonarRange(1),
+                        getSonarRange(2),
+                        getSonarRange(3),
+                        getSonarRange(4),
+                        getSonarRange(5)
+                };
+
+        // --- Log batterie toutes les ~10 secondes ---
+        long now = System.currentTimeMillis();
+        if (now - lastBatteryLogTimeMs >= 10_000) { // 10 000 ms = 10 s
+            lastBatteryLogTimeMs = now;
+
+            double v  = getBatteryCapacity();
+            double pc = getBatteryPercentage();
+            int    t  = getBatteryTime(); // temps écoulé en secondes
+
+            System.out.printf(
+                    "[BATT] V=%.2f V, P=%.0f%%, t=%d s%n",
+                    v, pc, t
+            );
+        }
+
+        // --- Sélection par mode ---
+        switch (mode) {
+            case MODE_AUTO:
+                // Utilisation des TLUs pour choisir Avoid / Track / etc.
+                autoModeWithTLU(cam, bat, snr, gps);
+                break;
+            case MODE_MANU:
+            default:
+                // En manuel : on laisse l'utilisateur piloter via l'UI.
+                // Si tu veux un filet de sécurité, décommente la ligne suivante :
+                // avoid();
+                break;
+        }
+    }
+
+    /**
+     * Mode AUTO : sélection de comportement via TLUs + subsomption.
+     *
+     * capteurs bruts :
+     *  - cam : score de template matching ([-1,1] typiquement)
+     *  - bat : capacité batterie (0..12 V)
+     *  - snr : distance min sonar (0..1 m, 1 = loin ou rien détecté)
+     *  - gps : distance au chargeur (en m)
+     */
+    private void autoModeWithTLU(double cam, double bat, double snr, double gps)
+    {
+
+        // ---------- Normalisation des capteurs dans [0,1] ----------
+
+        // Batterie
+        double batNorm = clamp01(Utils.map(bat, 0.0, (double) MAX_BATT_VOLT, 0.0, 1.0));
+        double batLow  = 1.0 - batNorm; // 0 = batterie pleine, 1 = batterie très faible
+
+        // GPS : distance au dock -> "near"
+        double gpsClamped = Math.min(gps, MAX_GPS_DIST);
+        double gpsNear    = 1.0 - (gpsClamped / MAX_GPS_DIST);
+        gpsNear = clamp01(gpsNear);
+
+        // Caméra : score [-1,1] -> [0,1]
+        double camNorm = clamp01((cam + 1.0) / 2.0);
+
+        // ---------- Sonars pour Avoid : on ne regarde que les frontaux (2 et 3) ----------
+
+        double[] ranges = getSonarRanges();
+        double s2 = ranges[2]; // avant-gauche
+        double s3 = ranges[3]; // avant-droite
+
+        // distance la plus proche DEVANT
+        double snrFront   = Math.min(s2, s3);
+        double snrClamped = clamp01(snrFront);
+        double snrClose   = 1.0 - snrClamped;   // 0 = loin, 1 = très proche
+
+        // ---------- TLU Avoid ----------
+        // On veut que Avoid s'active quand un obstacle est à moins de AVOID_FRONT_DIST devant.
+        // Condition équivalente : snrFront < AVOID_FRONT_DIST
+        // Or snrClose = 1 - snrFront, donc : 1 - snrFront > fAvoid  <=>  snrFront < 1 - fAvoid
+        // => on prend fAvoid = 1 - AVOID_FRONT_DIST
+        double[] sAvoid = { snrClose };
+        double[] wAvoid = { 1.0 };
+        double fAvoid = 1.0 - AVOID_FRONT_DIST;   // ex: 1 - 0.30 = 0.70
+
+        boolean avoidActive = tlu(wAvoid, sAvoid, fAvoid);
+
+
+        // ---------- TLU Track : s'active quand la batterie est faible ----------
+
+        // batLow ~ 0.0 => batterie pleine
+        // batLow ~ 1.0 => batterie très faible
+        double[] sTrack = { batLow };
+        double[] wTrack = { 1.0 };
+
+        // Avec fTrack = 0.2 :
+        // Track s'active quand batLow > 0.2, c.-à-d. quand la batterie est <~ 80 %
+        double fTrack = 0.2;
+
+        boolean trackActive = tlu(wTrack, sTrack, fTrack);
+
+        // Si le bouton "TRACK forcé" est activé, on force trackActive à true
+        if (trackOverride) {
+            trackActive = true;
+        }
+
+        // ---------- Clean & Wander ----------
+        // Clean = comportement de fond ; Wander = si bloqué
+        boolean isStuckNow = isStuck();
+
+        // ---------- Subsomption : (Track phase 2) > Avoid > Track > Clean > Wander ----------
+        int newBehavior;
+
+        if (inTrackPhase2) {
+            // En phase 2 de Track, on ne laisse plus Avoid prendre la main.
+            newBehavior = BEH_TRACK;
+        }
+        else if (avoidActive && !isCleanInAlignmentPhase()) {
+            newBehavior = BEH_AVOID;
+        }
+        else if (trackActive) {
+            newBehavior = BEH_TRACK;
+        }
+        else if (!isStuckNow) {
+            newBehavior = BEH_CLEAN;
+        }
+        else {
+            newBehavior = BEH_WANDER;
+        }
+
+        // Log si changement
+        logBehaviorChangeIfNeeded(newBehavior);
+
+        // Exécution
+        switch (newBehavior) {
+            case BEH_AVOID:
+                avoid();
+                break;
+
+            case BEH_TRACK:
+                track();
+                break;
+
+            case BEH_WANDER:
+                wander();
+                break;
+
+            case BEH_CLEAN:
+            default:
+                clean();
+                break;
+        }
+    }
+
+
+    //======================================================
+    // 3. Comportement CLEAN + helpers CLEAN
+    //======================================================
 
     // Comportement Clean : motif zigzag horizontal (bandes en Y, décalage en X)
     public void clean() {
@@ -1220,294 +1461,35 @@ public class Controller {
         }
     }
 
+    // À appeler au début d’un segment (ligne ou shift)
+    private void cleanResetSegmentOdo() {
+        cleanStartLeftEnc  = getLeftWheelEnc();
+        cleanStartRightEnc = getRightWheelEnc();
+    }
 
+    // Distance parcourue depuis le début du segment courant (en mètres)
+    private double cleanGetSegmentDistance() {
+        double dLeftRev  = getLeftWheelEnc()  - cleanStartLeftEnc;
+        double dRightRev = getRightWheelEnc() - cleanStartRightEnc;
 
+        double dLeft  = 2.0 * Math.PI * WHEEL_RADIUS * dLeftRev;
+        double dRight = 2.0 * Math.PI * WHEEL_RADIUS * dRightRev;
 
-    public void wander() {
-        System.out.println("[AUTO] Wander: manœuvre aléatoire");
+        return 0.5 * (dLeft + dRight);
+    }
 
-        // Choix aléatoire gauche/droite
-        double rnd = Math.random();
-        float turnVel = vel / 2.0f;
-        int turnTime = 300 + (int)(Math.random() * 700); // 300-1000 ms
-
-        if (rnd < 0.5) {
-            // tourne à gauche
-            turnSpot(-turnVel, turnTime);
-        } else {
-            // tourne à droite
-            turnSpot(turnVel, turnTime);
-        }
-
-        // Petite avance après la rotation
-        move(vel * 0.8f, 400);
+    // Retourne true si le Clean est encore dans la phase d'alignement initial
+    private boolean isCleanInAlignmentPhase() {
+        return cleanState == CLEAN_STATE_ALIGN_FORWARD
+                || cleanState == CLEAN_STATE_ALIGN_TURN_R
+                || cleanState == CLEAN_STATE_ALIGN_GO_EAST
+                || cleanState == CLEAN_STATE_ALIGN_TURN_180;
     }
 
 
-    /**
-     * Method     : Controller::update()
-     * Purpose    : To update custom code.
-     * Parameters : None.
-     * Returns    : Nothing.
-     * Notes      : Comment where appropriate.
-     **/
-    public void update() {
-        // Read from image test:
-//    int x = getImageWidth()/2;
-//    int y = getImageHeight()/2;
-//    System.out.println("pixel[" + x + "," + y + "]: " + getImagePixel(x, y));
-//    System.out.println("target[" + getTargetX() + "," + getTargetY() + "]: " + getTargetMaxScore());
-
-        // Write on image test:
-//    for(x=0 ; x<(getImageWidth()/3)  ; x++)
-//    for(y=0 ; y<(getImageHeight()/3) ; y++)
-//    setImagePixel(x, y, 128);
-//    displayImage();
-
-        // Template matching:
-        templateMatchingCV(getImage());
-
-        // Print sensors test:
-//    System.out.println("\nWheel(R): " + getRightWheelEnc() + ", Wheel(L): " + getLeftWheelEnc()); // Wheel revolutions.
-//    System.out.println("GPS(X): " + getGPSX() + ", GPS(Y): " + getGPSY() + ", GPS(Z): " + getGPSZ()); // GPS coordinates.
-//    System.out.println("C: " + getBatteryCapacity() + "v, P: " + getBatteryPercentage() + "%, S: " + getBatteryState() + ", T: " + getBatteryTime() + "sec"); // Battery stats.
-//    for(int i=0 ; i<getSonarNo() ; i++) System.out.println(i + ": " + Utils.getDecimal(getSonarRange(i), "0.0")); // Print ultrasonic ranges.
-    }
-
-    /**
-     * Method     : Controller::main()
-     * Purpose    : To run the main code.
-     * Parameters : None.
-     * Returns    : Nothing.
-     * Notes      : None.
-     **/
-    public void main()
-    {
-        run();
-    }
-
-    /**
-     * Method     : SubsumptionCoordinator::run()
-     * Purpose    : To run a custom Subsumption Architecture.
-     * Parameters : None.
-     * Returns    : Nothing.
-     * Notes      : None.
-     **/
-    public void run()
-    {
-        // 0) Si on est déjà docké, on coupe tout comportement automatique
-        if (trackDocked) {
-            // On s'assure que les moteurs sont bien à l'arrêt
-            setVel(0, 0);
-            dir = 's';
-
-            // Optionnel : on log une seule fois le passage en état "dock"
-            if (currentBehavior != BEH_NONE) {
-                System.out.println("[AUTO] Dock atteint -> arrêt définitif des comportements automatiques.");
-                currentBehavior = BEH_NONE;
-            }
-
-            // On ne fait plus AUCUNE décision auto tant que trackDocked reste true
-            return;
-        }
-
-        // Mise à jour de l'orientation estimée à partir des encodeurs
-        updateOdometry();
-
-        // 1) Initialiser la position de docking une seule fois au début
-        if (!dockPositionInitialized) {
-            // On connaît déjà la position fixe du dock dans la scène
-            dockX = CHARGER_XCOORD;   // 1.78
-            dockY = CHARGER_YCOORD;   // -0.78
-            dockPositionInitialized = true;
-
-            System.out.println("[DOCK] Position fixe de la station: X=" + dockX + "  Y=" + dockY);
-        }
-
-
-        // Override dev : batterie plus courte (ex: 2 minutes)
-//        if (!batteryDevOverrideDone) {
-//            setBatteryTime(2);  // 2 minutes au lieu de 20
-//            batteryDevOverrideDone = true;
-//            System.out.println("[BATT] Override dev: batterie réglée sur 2 minutes.");
-//        }
-
-        Integer priority[] = new Integer[2];
-        //        int priority[] = new int[4];
-
-        double cam = getTargetMaxScore();                                                      // Target horizontal detection (pixels).
-        double bat = getBatteryCapacity();                                                     // Battery capacity (volts).
-        double snr = Arrays.stream(getSonarRanges()).min().getAsDouble();                      // Min sonar range radius (meters).
-
-        // On utilise la position dynamique du dock si elle est connue,
-        // sinon on retombe sur les constantes d'origine.
-        double dockXUsed = dockPositionInitialized ? dockX : CHARGER_XCOORD;
-        double dockYUsed = dockPositionInitialized ? dockY : CHARGER_YCOORD;
-
-        double gps = Utils.getEuclidean(
-                getGPSX(), getGPSY(),
-                dockXUsed, dockYUsed
-        );
-        double sensors[] = new double[]{bat, snr, cam, gps};                                   // Sensor vector.
-
-        double sonarData[] = new double[]
-                {
-                        getSonarRange(0),
-                        getSonarRange(1),
-                        getSonarRange(2),
-                        getSonarRange(3),
-                        getSonarRange(4),
-                        getSonarRange(5)
-                };
-
-        // --- Log batterie toutes les ~10 secondes ---
-        long now = System.currentTimeMillis();
-        if (now - lastBatteryLogTimeMs >= 10_000) { // 10 000 ms = 10 s
-            lastBatteryLogTimeMs = now;
-
-            double v  = getBatteryCapacity();
-            double pc = getBatteryPercentage();
-            int    t  = getBatteryTime(); // temps écoulé en secondes
-
-            System.out.printf(
-                    "[BATT] V=%.2f V, P=%.0f%%, t=%d s%n",
-                    v, pc, t
-            );
-        }
-
-        // --- Sélection par mode ---
-        switch (mode) {
-            case MODE_AUTO:
-                // Utilisation des TLUs pour choisir Avoid / Track / etc.
-                autoModeWithTLU(cam, bat, snr, gps);
-                break;
-            case MODE_MANU:
-            default:
-                // En manuel : on laisse l'utilisateur piloter via l'UI.
-                // Si tu veux un filet de sécurité, décommente la ligne suivante :
-                // avoid();
-                break;
-        }
-    }
-
-
-    /**
-     * Mode AUTO : sélection de comportement via TLUs + subsomption.
-     *
-     * capteurs bruts :
-     *  - cam : score de template matching ([-1,1] typiquement)
-     *  - bat : capacité batterie (0..12 V)
-     *  - snr : distance min sonar (0..1 m, 1 = loin ou rien détecté)
-     *  - gps : distance au chargeur (en m)
-     */
-    private void autoModeWithTLU(double cam, double bat, double snr, double gps)
-    {
-
-        // ---------- Normalisation des capteurs dans [0,1] ----------
-
-        // Batterie
-        double batNorm = clamp01(Utils.map(bat, 0.0, (double) MAX_BATT_VOLT, 0.0, 1.0));
-        double batLow  = 1.0 - batNorm; // 0 = batterie pleine, 1 = batterie très faible
-
-        // GPS : distance au dock -> "near"
-        double gpsClamped = Math.min(gps, MAX_GPS_DIST);
-        double gpsNear    = 1.0 - (gpsClamped / MAX_GPS_DIST);
-        gpsNear = clamp01(gpsNear);
-
-        // Caméra : score [-1,1] -> [0,1]
-        double camNorm = clamp01((cam + 1.0) / 2.0);
-
-        // ---------- Sonars pour Avoid : on ne regarde que les frontaux (2 et 3) ----------
-
-        double[] ranges = getSonarRanges();
-        double s2 = ranges[2]; // avant-gauche
-        double s3 = ranges[3]; // avant-droite
-
-        // distance la plus proche DEVANT
-        double snrFront   = Math.min(s2, s3);
-        double snrClamped = clamp01(snrFront);
-        double snrClose   = 1.0 - snrClamped;   // 0 = loin, 1 = très proche
-
-        // ---------- TLU Avoid ----------
-        // On veut que Avoid s'active quand un obstacle est à moins de AVOID_FRONT_DIST devant.
-        // Condition équivalente : snrFront < AVOID_FRONT_DIST
-        // Or snrClose = 1 - snrFront, donc : 1 - snrFront > fAvoid  <=>  snrFront < 1 - fAvoid
-        // => on prend fAvoid = 1 - AVOID_FRONT_DIST
-        double[] sAvoid = { snrClose };
-        double[] wAvoid = { 1.0 };
-        double fAvoid = 1.0 - AVOID_FRONT_DIST;   // ex: 1 - 0.30 = 0.70
-
-        boolean avoidActive = tlu(wAvoid, sAvoid, fAvoid);
-
-
-        // ---------- TLU Track : s'active quand la batterie est faible ----------
-
-        // batLow ~ 0.0 => batterie pleine
-        // batLow ~ 1.0 => batterie très faible
-        double[] sTrack = { batLow };
-        double[] wTrack = { 1.0 };
-
-        // Avec fTrack = 0.2 :
-        // Track s'active quand batLow > 0.2, c.-à-d. quand la batterie est <~ 80 %
-        double fTrack = 0.2;
-
-        boolean trackActive = tlu(wTrack, sTrack, fTrack);
-
-        // Si le bouton "TRACK forcé" est activé, on force trackActive à true
-        if (trackOverride) {
-            trackActive = true;
-        }
-
-        // ---------- Clean & Wander ----------
-        // Clean = comportement de fond ; Wander = si bloqué
-        boolean isStuckNow = isStuck();
-
-        // ---------- Subsomption : (Track phase 2) > Avoid > Track > Clean > Wander ----------
-        int newBehavior;
-
-        if (inTrackPhase2) {
-            // En phase 2 de Track, on ne laisse plus Avoid prendre la main.
-            newBehavior = BEH_TRACK;
-        }
-        else if (avoidActive && !isCleanInAlignmentPhase()) {
-            newBehavior = BEH_AVOID;
-        }
-        else if (trackActive) {
-            newBehavior = BEH_TRACK;
-        }
-        else if (!isStuckNow) {
-            newBehavior = BEH_CLEAN;
-        }
-        else {
-            newBehavior = BEH_WANDER;
-        }
-
-        // Log si changement
-        logBehaviorChangeIfNeeded(newBehavior);
-
-        // Exécution
-        switch (newBehavior) {
-            case BEH_AVOID:
-                avoid();
-                break;
-
-            case BEH_TRACK:
-                track();
-                break;
-
-            case BEH_WANDER:
-                wander();
-                break;
-
-            case BEH_CLEAN:
-            default:
-                clean();
-                break;
-        }
-    }
-
-
-
+    //======================================================
+    // 4. Comportement TRACK + helpers TRACK
+    //======================================================
     public void track()
     {
         if (trackDocked) {
@@ -1628,9 +1610,6 @@ public class Controller {
             move(fwdVel, moveTime);
         }
     }
-
-
-
 
 
     // Phase 2 du Track : caméra uniquement, pour orientation + petits pas vers le dock
@@ -1791,9 +1770,9 @@ public class Controller {
         }
     }
 
-
-
-
+    //======================================================
+    // 5. Comportement AVOID
+    //======================================================
     public void avoid()
     {
         // Si on est docké, plus d'évitement
@@ -1883,8 +1862,32 @@ public class Controller {
         // Sinon, par sécurité, on ne fait rien ici
     }
 
+    //======================================================
+    // 6. Comportement WANDER
+    //======================================================
+    public void wander() {
+        System.out.println("[AUTO] Wander: manœuvre aléatoire");
 
+        // Choix aléatoire gauche/droite
+        double rnd = Math.random();
+        float turnVel = vel / 2.0f;
+        int turnTime = 300 + (int)(Math.random() * 700); // 300-1000 ms
 
+        if (rnd < 0.5) {
+            // tourne à gauche
+            turnSpot(-turnVel, turnTime);
+        } else {
+            // tourne à droite
+            turnSpot(turnVel, turnTime);
+        }
+
+        // Petite avance après la rotation
+        move(vel * 0.8f, 400);
+    }
+
+    //======================================================
+    // 7. Odométrie & mouvement bas niveau
+    //======================================================
     // Mise à jour de l'orientation estimée à partir des encodeurs
     private void updateOdometry() {
         double leftEnc  = getLeftWheelEnc();  // en tours
@@ -1982,36 +1985,9 @@ public class Controller {
         setVel(0, 0);
     }
 
-
-
-
-
-
-
-
-
-    // --- Helpers Clean : odométrie locale d’un segment (ligne ou décalage) ---
-
-    // À appeler au début d’un segment (ligne ou shift)
-    private void cleanResetSegmentOdo() {
-        cleanStartLeftEnc  = getLeftWheelEnc();
-        cleanStartRightEnc = getRightWheelEnc();
-    }
-
-    // Distance parcourue depuis le début du segment courant (en mètres)
-    private double cleanGetSegmentDistance() {
-        double dLeftRev  = getLeftWheelEnc()  - cleanStartLeftEnc;
-        double dRightRev = getRightWheelEnc() - cleanStartRightEnc;
-
-        double dLeft  = 2.0 * Math.PI * WHEEL_RADIUS * dLeftRev;
-        double dRight = 2.0 * Math.PI * WHEEL_RADIUS * dRightRev;
-
-        return 0.5 * (dLeft + dRight);
-    }
-
-
-
-
+    //======================================================
+    // 8. Helpers génériques (math, TLU, debug, stuck)
+    //======================================================
     /**
      * Method     : Controller::tlu()
      * Purpose    : To implement a Threshold Logic Unit.
@@ -2042,23 +2018,13 @@ public class Controller {
         return (sum > f);
     }
 
+
     // Clamp simple dans [0,1]
     private double clamp01(double x) {
         if (x < 0.0) return 0.0;
         if (x > 1.0) return 1.0;
         return x;
     }
-
-
-    // Retourne true si le Clean est encore dans la phase d'alignement initial
-    private boolean isCleanInAlignmentPhase() {
-        return cleanState == CLEAN_STATE_ALIGN_FORWARD
-                || cleanState == CLEAN_STATE_ALIGN_TURN_R
-                || cleanState == CLEAN_STATE_ALIGN_GO_EAST
-                || cleanState == CLEAN_STATE_ALIGN_TURN_180;
-    }
-
-
 
 
     // Affiche un message seulement si le comportement a changé
@@ -2119,5 +2085,4 @@ public class Controller {
         // Considérer “bloqué” après 5 secondes sans vraiment bouger
         return (stuckCounter >= 5);
     }
-
 }
