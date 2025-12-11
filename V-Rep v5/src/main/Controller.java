@@ -802,6 +802,47 @@ public class Controller {
      *                                                   Student Code                                                   *
      ********************************************************************************************************************/
 
+    // <----- Carte ASCI ----->
+
+    // --- Géométrie de la pièce (approx) + marge de sécurité ---
+    private static final double ROOM_X_MAX   =  2.18;
+    private static final double ROOM_X_MIN   = -2.18;
+    private static final double ROOM_Y_MAX   =  2.21;
+    private static final double ROOM_Y_MIN   = -2.16;
+
+    private static final double CLEAN_MARGIN = 0.20; // distance sécurité murs
+
+    private static final double CLEAN_X_MAX_SAFE = ROOM_X_MAX - CLEAN_MARGIN; //
+    private static final double CLEAN_X_MIN_SAFE = ROOM_X_MIN + CLEAN_MARGIN; //
+    private static final double CLEAN_Y_MAX_SAFE = ROOM_Y_MAX - CLEAN_MARGIN; //
+    private static final double CLEAN_Y_MIN_SAFE = ROOM_Y_MIN + CLEAN_MARGIN; //
+
+    // --- Carte ASCII de couverture ---
+// Résolution de la grille (taille d'une cellule en mètres)
+// Plus c'est grand, plus la carte est grossière
+    private static final double MAP_RES = 0.15;
+
+    // Si true : on applique une rotation de 90° anti-horaire pour afficher la carte
+    private static final boolean MAP_ROTATE_90_CCW = true;
+
+    // Dimensions de la grille, dérivées de la taille de la pièce
+    private static final int MAP_W = (int) Math.ceil((ROOM_X_MAX - ROOM_X_MIN) / MAP_RES);
+    private static final int MAP_H = (int) Math.ceil((ROOM_Y_MAX - ROOM_Y_MIN) / MAP_RES);
+
+    // Grille de couverture : coverageMap[gy][gx] = true si la cellule a été visitée
+    private final boolean[][] coverageMap = new boolean[MAP_H][MAP_W];
+
+    // Période d’affichage de la carte en ms
+    private static final long ASCII_PRINT_PERIOD_MS = 10_000L;
+
+    // Dernière fois où la carte a été affichée
+    private long lastAsciiPrintMs = 0L;
+
+
+
+
+
+
     // Distance à partir de laquelle Avoid s'active (mètres)
     // À CHOISIR plus petite que la distance mini que Clean garde aux murs.
     private static final double AVOID_FRONT_DIST = 0.10;   // ex: 0.30 m
@@ -869,7 +910,34 @@ public class Controller {
     // Log batterie périodique
     private long lastBatteryLogTimeMs = 0;
 
+
     // --- FSM pour Clean (motif zigzag horizontal avec odométrie) ---
+
+    // --- Suivi du cap pendant les bandes Y ---
+    private boolean cleanHeadingHasLastSample = false;
+    private double  cleanHeadingLastX = 0.0;
+    private double  cleanHeadingLastY = 0.0;
+
+    // cap courant en radians (0 = +Y, 90° = +X)
+    private double  cleanHeadingRad = 0.0;
+
+    // distance minimale entre deux échantillons GPS pour mettre à jour le cap
+    private static final double CLEAN_HEADING_SAMPLE_MIN_DIST = 0.08; // 8 cm
+
+    // paramètres de correction
+    private static final double CLEAN_HEADING_DEADBAND_DEG = 3.0;  // zone morte ±3°
+    private static final double CLEAN_HEADING_KP = 2.0;            // plus grand = correction plus forte
+
+    // fréquence de correction
+    private static final long CLEAN_HEADING_CORR_PERIOD_MS = 400;  // 0,4 s entre deux corrections
+    private long cleanLastHeadingCorrTimeMs = 0L;
+
+    private long    cleanHeadingLastTimeMs = 0L;
+
+    // Seuils pour l'update du heading
+    private static final long   CLEAN_HEADING_MIN_DT_MS   = 80;   // min ~0.08s entre deux updates
+    private static final double CLEAN_HEADING_MIN_DIST    = 0.02; // min ~2 cm entre deux points
+
 
     // --- DEBUG orientation Clean (non bloquant) ---
     private boolean headingDebugHasLast = false;
@@ -894,19 +962,6 @@ public class Controller {
     private static final int CLEAN_STATE_DONE            = 9;
 
     private int cleanState = CLEAN_STATE_ALIGN_TURN_R;
-
-    // --- Géométrie de la pièce (approx) + marge de sécurité ---
-    private static final double ROOM_X_MAX   =  2.18;
-    private static final double ROOM_X_MIN   = -2.18;
-    private static final double ROOM_Y_MAX   =  2.21;
-    private static final double ROOM_Y_MIN   = -2.16;
-
-    private static final double CLEAN_MARGIN = 0.50; // distance sécurité murs
-
-    private static final double CLEAN_X_MAX_SAFE = ROOM_X_MAX - CLEAN_MARGIN; // ≈ 1.93
-    private static final double CLEAN_X_MIN_SAFE = ROOM_X_MIN + CLEAN_MARGIN; // ≈ -1.93
-    private static final double CLEAN_Y_MAX_SAFE = ROOM_Y_MAX - CLEAN_MARGIN; // ≈ 1.96
-    private static final double CLEAN_Y_MIN_SAFE = ROOM_Y_MIN + CLEAN_MARGIN; // ≈ -1.91
 
     // Longueur max d’une bande horizontale (odométrie) – on reste un peu en-deçà
     private static final double CLEAN_ROW_DIST_MAX   = 3.8;  // m
@@ -935,7 +990,6 @@ public class Controller {
     private double  cleanLastY = 0.0;
 
     // Gain de correction de cap pendant les grandes bandes
-    private static final double CLEAN_HEADING_KP = 0.8;                 // plus grand = correction plus agressive
     private static final double CLEAN_HEADING_ERR_DEADBAND_RAD =
             Math.toRadians(2.0);                                        // zone morte ~2°
 
@@ -1168,6 +1222,11 @@ public class Controller {
                 // avoid();
                 break;
         }
+
+        // Mise à jour de la carte de couverture + affichage périodique
+        updateCoverageMap();
+        maybePrintAsciiCoverageMap();
+
     }
 
     /**
@@ -1228,7 +1287,7 @@ public class Controller {
 
         // Avec fTrack = 0.2 :
         // Track s'active quand batLow > 0.2, c.-à-d. quand la batterie est <~ 80 %
-        double fTrack = 0.2;
+        double fTrack = 0.8;
 
         boolean trackActive = tlu(wTrack, sTrack, fTrack);
 
@@ -1287,8 +1346,8 @@ public class Controller {
 
 
     //======================================================
-    // 3. Comportement CLEAN + helpers CLEAN
-    //======================================================
+// 3. Comportement CLEAN + helpers CLEAN
+//======================================================
 
     // Comportement Clean : motif zigzag horizontal (bandes en Y, décalage en X)
     public void clean() {
@@ -1322,7 +1381,7 @@ public class Controller {
                     cleanSegmentStarted = true;
                 }
 
-                double dist        = cleanGetSegmentDistance();
+                double dist         = cleanGetSegmentDistance();
                 boolean closeToEast = (y <= CLEAN_Y_MIN_SAFE);
 
                 // On avance tant qu'on n'est pas dans la "zone sûre" EST,
@@ -1346,6 +1405,10 @@ public class Controller {
                 cleanRowDirPositiveY = true;
                 cleanStripIndex      = 0;
 
+                // On remet à zéro l'estimation de heading pour ne pas prendre en compte l'alignement
+                cleanHeadingHasLastSample   = false;
+                cleanLastHeadingCorrTimeMs  = 0L;
+
                 cleanSegmentStarted = false;
                 cleanState = CLEAN_STATE_ZIG_ROW_START;
                 break;
@@ -1353,10 +1416,24 @@ public class Controller {
 
             // 4) Début d'une nouvelle ligne horizontale
             case CLEAN_STATE_ZIG_ROW_START: {
-                headingDebugHasLast = false; // reset du suivi d'angle pour cette nouvelle bande
-                // Vérifier si on a encore de la place en X pour une nouvelle bande
-                if (x <= CLEAN_X_MIN_SAFE || cleanStripIndex >= CLEAN_MAX_STRIPS) {
-                    System.out.println("[CLEAN] Toutes les bandes effectuées ou limite X atteinte -> CLEAN terminé.");
+                // Reset du suivi d'angle (debug + contrôle) pour cette nouvelle bande
+                headingDebugHasLast        = false;
+                cleanHeadingHasLastSample  = false;
+                cleanLastHeadingCorrTimeMs = 0L;
+
+                // Condition d'arrêt : uniquement quand on est :
+                //  - arrivé au bord gauche interne en X
+                //  - ET en haut de la zone de nettoyage en Y
+                //  OU quand on a dépassé le nombre max de bandes
+                boolean atLeftX      = (x <= CLEAN_X_MIN_SAFE);
+                boolean atTopY       = (y >= CLEAN_Y_MAX_SAFE);
+                boolean stripsLimit  = (cleanStripIndex >= CLEAN_MAX_STRIPS);
+
+                if ( (atLeftX && atTopY) || stripsLimit ) {
+                    System.out.printf(
+                            "[CLEAN] Fin du motif : coin haut-gauche atteint (x=%.3f, y=%.3f) ou max strips (%d/%d).%n",
+                            x, y, cleanStripIndex, CLEAN_MAX_STRIPS
+                    );
                     cleanState = CLEAN_STATE_DONE;
                     setVel(0, 0);
                     break;
@@ -1365,12 +1442,13 @@ public class Controller {
                 cleanResetSegmentOdo();
                 cleanSegmentStarted = true;
 
-                // On va démarrer une nouvelle bande : on réinitialise le point de référence pour la correction
+                // (Optionnel: si tu avais un autre mécanisme de suivi de trajectoire)
                 cleanHasLastPos = false;
 
                 cleanState = CLEAN_STATE_ZIG_ROW_RUN;
                 break;
             }
+
 
             // 5) Avance en Y (ligne horizontale)
             case CLEAN_STATE_ZIG_ROW_RUN: {
@@ -1387,23 +1465,17 @@ public class Controller {
                 }
 
                 if (!finishedRow) {
-                    // IMPORTANT :
-                    // Le robot est déjà orienté dans la bonne direction (+Y ou -Y)
-                    // grâce aux rotations précédentes.
-                    // On avance donc TOUJOURS vers l'avant (vitesse positive).
-                    move(vel * 0.8f, CLEAN_STEP_TIME_MS);
-                    // DEBUG ORIENTATION EN TEMPS RÉEL (non bloquant)
-                    debugLogHeadingRealtime();
+                    // 1) Met à jour le cap depuis le GPS
+                    updateCleanHeadingEstimate();
+
+                    // 2) Avance + correction éventuelle
+                    cleanForwardWithHeadingCorrection();
                 } else {
                     cleanSegmentStarted = false;
                     cleanState = CLEAN_STATE_ZIG_UTURN_1;
-
-                    // On peut réinitialiser le debug pour la prochaine bande si tu veux
-                    headingDebugHasLast = false;
                 }
                 break;
             }
-
 
             // 6) Premier virage du U-Turn (on se met dans l'axe X pour le décalage)
             case CLEAN_STATE_ZIG_UTURN_1: {
@@ -1434,28 +1506,29 @@ public class Controller {
                     cleanSegmentStarted = true;
                 }
 
-                double dist       = cleanGetSegmentDistance();
+                double dist        = cleanGetSegmentDistance();
                 boolean reachedShift = (dist >= CLEAN_STRIP_STEP);
-                boolean outOfRoom    = (x <= CLEAN_X_MIN_SAFE);
+                boolean reachedLeftX = (x <= CLEAN_X_MIN_SAFE);
 
-                if (!reachedShift && !outOfRoom) {
+                // Tant qu'on n'a pas fini le décalage ET qu'on n'est pas encore au bord gauche,
+                // on continue à avancer vers -X.
+                if (!reachedShift && !reachedLeftX) {
                     // Orientation actuelle : vers -X ; on "descend" d'une bande
                     move(vel * 0.6f, CLEAN_STEP_TIME_MS);
                 } else {
+                    // On arrête le segment de shift
                     cleanSegmentStarted = false;
 
-                    // Si on ne peut plus se décaler, on arrête le Clean
-                    if (outOfRoom) {
-                        System.out.println("[CLEAN] Plus de place pour se décaler en X -> CLEAN terminé.");
-                        cleanState = CLEAN_STATE_DONE;
-                    } else {
-                        // Décalage validé : on a créé une nouvelle "bande"
-                        cleanStripIndex++;
-                        cleanState = CLEAN_STATE_ZIG_UTURN_2;
-                    }
+                    // On NE termine PLUS le clean ici :
+                    // même si reachedLeftX est vrai, on laisse le U-Turn 2 se faire,
+                    // puis la prochaine bande commencera, et c'est ZIG_ROW_START qui décidera
+                    // s'il faut arrêter (avec la condition X_MIN_SAFE + Y_MAX_SAFE).
+                    cleanStripIndex++;
+                    cleanState = CLEAN_STATE_ZIG_UTURN_2;
                 }
                 break;
             }
+
 
             // 8) Deuxième virage du U-Turn (on se remet parallèle à Y, sens inversé)
             case CLEAN_STATE_ZIG_UTURN_2: {
@@ -1489,6 +1562,7 @@ public class Controller {
                 break;
         }
     }
+
 
     // À appeler au début d’un segment (ligne ou shift)
     private void cleanResetSegmentOdo() {
@@ -1575,6 +1649,111 @@ public class Controller {
         headingDebugLastTimeMs = now;
     }
 
+    // Met à jour l'estimation de l'angle du robot à partir de deux points GPS.
+// Convention : 0° = +Y, 90° = +X.
+    private void updateCleanHeadingEstimate() {
+
+        double x = getGPSX();
+        double y = getGPSY();
+
+        if (!cleanHeadingHasLastSample) {
+            cleanHeadingLastX = x;
+            cleanHeadingLastY = y;
+            cleanHeadingHasLastSample = true;
+            return;
+        }
+
+        double dx   = x - cleanHeadingLastX;
+        double dy   = y - cleanHeadingLastY;
+        double dist = Math.sqrt(dx * dx + dy * dy);
+
+        // si on n'a presque pas bougé, on garde l'ancien cap
+        if (dist < CLEAN_HEADING_SAMPLE_MIN_DIST) {
+            return;
+        }
+
+        // 0° = +Y, 90° = +X : on utilise atan2(dx, dy)
+        double angleRad = Math.atan2(dx, dy);
+        cleanHeadingRad = angleRad;
+
+        double angleDeg = Math.toDegrees(angleRad);
+        if (angleDeg > 180.0)  angleDeg -= 360.0;
+        if (angleDeg <= -180.0) angleDeg += 360.0;
+
+        System.out.printf(
+                "[HEADING DEBUG] Angle ≈ %.1f° (0° = +Y, 90° = +X), pos=(%.3f, %.3f), Δ=%.1f cm%n",
+                angleDeg, x, y, dist * 100.0
+        );
+
+        cleanHeadingLastX = x;
+        cleanHeadingLastY = y;
+    }
+
+
+
+    // Avance pendant CLEAN_STEP_TIME_MS, avec éventuelle correction de cap
+// en utilisant turnSpot(), en se basant sur le heading calculé via le GPS.
+    private void cleanForwardWithHeadingCorrection() {
+
+        double baseSpeed = vel * 0.8;   // vitesse de base
+
+        // Si pas encore de cap fiable -> on avance tout droit
+        if (!cleanHeadingHasLastSample) {
+            move((float) baseSpeed, CLEAN_STEP_TIME_MS);
+            return;
+        }
+
+        long now = System.currentTimeMillis();
+        boolean timeForCorrection =
+                (now - cleanLastHeadingCorrTimeMs) >= CLEAN_HEADING_CORR_PERIOD_MS;
+
+        // Cap désiré :
+        //  - bande vers +Y  -> 0 rad
+        //  - bande vers -Y  -> PI rad (180°)
+        double desiredRad = cleanRowDirPositiveY ? 0.0 : Math.PI;
+        double targetDeg  = cleanRowDirPositiveY ? 0.0 : 180.0;
+
+        // Erreur de cap (dans le repère "0° = +Y, 90° = +X")
+        double headingError = normalizeAngle(desiredRad - cleanHeadingRad);
+        double deadbandRad  = Math.toRadians(CLEAN_HEADING_DEADBAND_DEG);
+
+        if (timeForCorrection && Math.abs(headingError) > deadbandRad) {
+
+            float turnVel  = vel / 4.0f;
+            int   turnTime = 120; // petite impulsion de rotation
+
+            double headingDeg = Math.toDegrees(cleanHeadingRad);
+            double errDeg     = Math.toDegrees(headingError);
+
+            System.out.printf(
+                    "[HEADING CORR] heading=%.1f°, target=%s (%.1f°), err=%.1f°%n",
+                    headingDeg,
+                    (cleanRowDirPositiveY ? "+Y" : "-Y"),
+                    targetDeg,
+                    errDeg
+            );
+
+            // ⚠️ IMPORTANT :
+            // On inverse le signe par rapport à TRACK, car le heading GPS
+            // n'est pas dans le même repère que odoTheta.
+            //
+            // On veut :
+            //  - si headingError > 0  -> augmenter heading  -> turnSpot(+turnVel)
+            //  - si headingError < 0  -> diminuer heading  -> turnSpot(-turnVel)
+            if (headingError > 0) {
+                // corriger vers la gauche dans ton repère GPS
+                turnSpot(turnVel, turnTime);
+            } else {
+                // corriger vers la droite dans ton repère GPS
+                turnSpot(-turnVel, turnTime);
+            }
+
+            cleanLastHeadingCorrTimeMs = now;
+        }
+
+        // Dans tous les cas on avance un petit coup
+        move((float) baseSpeed, CLEAN_STEP_TIME_MS);
+    }
 
 
 
@@ -2175,5 +2354,147 @@ public class Controller {
 
         // Considérer “bloqué” après 5 secondes sans vraiment bouger
         return (stuckCounter >= 5);
+    }
+
+    //======================================================
+    // 9. DEBUG : Carte ASCII de la couverture
+    //======================================================
+
+    // Convertit une position (x,y) du monde en indices (gx,gy) de la carte,
+    // en appliquant éventuellement une rotation 90° anti-horaire autour
+    // du centre de la pièce.
+    private int[] worldToMapCell(double x, double y) {
+
+        if (MAP_ROTATE_90_CCW) {
+            // Centre de la pièce
+            double cx = 0.5 * (ROOM_X_MIN + ROOM_X_MAX);
+            double cy = 0.5 * (ROOM_Y_MIN + ROOM_Y_MAX);
+
+            double dx = x - cx;
+            double dy = y - cy;
+
+            // rotation 90° CCW : (x', y') = (-dy, dx)
+            double rx = -dy;
+            double ry =  dx;
+
+            x = cx + rx;
+            y = cy + ry;
+        }
+
+        int gx = (int) Math.floor((x - ROOM_X_MIN) / MAP_RES);
+        int gy = (int) Math.floor((y - ROOM_Y_MIN) / MAP_RES);
+
+        if (gx < 0 || gx >= MAP_W || gy < 0 || gy >= MAP_H) {
+            return null; // en dehors de la carte
+        }
+        return new int[]{ gx, gy };
+    }
+
+    // Marque la cellule correspondant à la position actuelle du robot comme "couverte"
+// et élargit la trace pour approximer la taille réelle du robot.
+    private void updateCoverageMap() {
+        int[] cell = worldToMapCell(getGPSX(), getGPSY());
+        if (cell == null) return;
+        int gx = cell[0];
+        int gy = cell[1];
+
+        // On marque une croix :
+        //   (gx, gy-1)
+        // (gx-1,gy) (gx,gy) (gx+1,gy)
+        //   (gx, gy+1)
+        markCoveredCell(gx,     gy);
+        markCoveredCell(gx - 1, gy);
+        markCoveredCell(gx + 1, gy);
+        markCoveredCell(gx,     gy - 1);
+        markCoveredCell(gx,     gy + 1);
+    }
+
+    // Helper : marque une cellule si elle est dans la carte
+    private void markCoveredCell(int gx, int gy) {
+        if (gx < 0 || gx >= MAP_W || gy < 0 || gy >= MAP_H) return;
+        coverageMap[gy][gx] = true;
+    }
+
+
+    // Appel périodique : affiche la carte ASCII et le pourcentage de couverture
+    private void maybePrintAsciiCoverageMap() {
+        long now = System.currentTimeMillis();
+        if (now - lastAsciiPrintMs < ASCII_PRINT_PERIOD_MS) {
+            return;
+        }
+        lastAsciiPrintMs = now;
+        printAsciiCoverageMap();
+    }
+
+    // Affiche la carte ASCII + stats de couverture
+    private void printAsciiCoverageMap() {
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("\n================ ASCII COVERAGE MAP ================\n");
+        sb.append("Y^ (haut de la pièce, vue rotée 90° anti-horaire)\n\n");
+
+        // Cellule actuelle du robot
+        int[] robotCell = worldToMapCell(getGPSX(), getGPSY());
+
+        // Cellule du dock (position "connue" comme pour le TRACK)
+        double dockXUsed = dockPositionInitialized ? dockX : CHARGER_XCOORD;
+        double dockYUsed = dockPositionInitialized ? dockY : CHARGER_YCOORD;
+        int[] dockCell = worldToMapCell(dockXUsed, dockYUsed);
+
+        int covered = 0;
+        int total   = 0;
+
+        // Pré-calcul pour le robot (croix 3x3 centrée sur robotCell)
+        int rx = -1, ry = -1;
+        if (robotCell != null) {
+            rx = robotCell[0];
+            ry = robotCell[1];
+        }
+
+        // On parcourt les lignes de HAUT en BAS,
+// mais on skippe la toute première ligne (MAP_H - 1)
+        for (int gy = MAP_H - 2; gy >= 0; gy--) {
+            for (int gx = 0; gx < MAP_W; gx++) {
+
+                char c = '.'; // par défaut : jamais visitée
+
+                if (coverageMap[gy][gx]) {
+                    c = '*';
+                    covered++;
+                }
+                total++;
+
+                // Dock
+                if (dockCell != null && gx == dockCell[0] && gy == dockCell[1]) {
+                    c = 'D';
+                }
+
+                // Robot en croix
+                if (robotCell != null) {
+                    boolean isRobot =
+                            (gx == rx && gy == ry) ||
+                                    (gx == rx && (gy == ry - 1 || gy == ry + 1)) ||
+                                    (gy == ry && (gx == rx - 1 || gx == rx + 1));
+
+                    if (isRobot) {
+                        c = 'R';
+                    }
+                }
+
+                sb.append(c).append(' ');
+            }
+            sb.append('\n');
+        }
+
+
+        sb.append("\nX-> (droite de la pièce, vue rotée 90° anti-horaire)\n");
+
+        double coveragePercent = (total > 0) ? (100.0 * covered / total) : 0.0;
+        sb.append(
+                String.format("Couverture estimée: %.1f %% (%d / %d cellules)\n",
+                        coveragePercent, covered, total)
+        );
+
+        System.out.print(sb.toString());
     }
 }
