@@ -1302,6 +1302,21 @@ public class Controller {
         // Clean = comportement de fond ; Wander = si bloqué
         boolean isStuckNow = isStuck();
 
+        // ---------- TLU Wander ----------
+        // Wander = comportement de bas niveau, activé quand le robot est bloqué.
+        //
+        // On encode "stuck" comme un pseudo-senseur binaire :
+        //   sWander = 1 quand le robot est bloqué, 0 sinon.
+        // Puis on choisit fWander = 0.5 pour avoir :
+        //   - sum = 1 > 0.5  => y = +1 (Wander actif)   si bloqué
+        //   - sum = 0 ≤ 0.5  => y = -1 (Wander inactif) sinon
+        double[] sWander = { isStuckNow ? 1.0 : 0.0 };
+        double[] wWander = { 1.0 };
+        double   fWander = 0.5;
+
+        boolean wanderActive = tlu(wWander, sWander, fWander);
+
+
         // ---------- Subsomption : (Track phase 2) > Avoid > Track > Clean > Wander ----------
         int newBehavior;
 
@@ -1315,11 +1330,13 @@ public class Controller {
         else if (trackActive) {
             newBehavior = BEH_TRACK;
         }
-        else if (!isStuckNow) {
-            newBehavior = BEH_CLEAN;
+        else if (wanderActive) {
+            // Wander actif (robot bloqué) -> manœuvre aléatoire de déblocage
+            newBehavior = BEH_WANDER;
         }
         else {
-            newBehavior = BEH_WANDER;
+            // Comportement de fond : nettoyage systématique
+            newBehavior = BEH_CLEAN;
         }
 
         // Log si changement

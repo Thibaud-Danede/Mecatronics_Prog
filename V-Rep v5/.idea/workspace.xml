@@ -5,7 +5,6 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="30d387d6-7216-4fff-8f4f-e25f5e1dbb23" name="Default Changelist" comment="Rétablissement d'un track qui marche à peu près">
-      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/out/production/V-Rep v5/main/Controller.class" beforeDir="false" afterPath="$PROJECT_DIR$/out/production/V-Rep v5/main/Controller.class" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/main/Controller.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/Controller.java" afterDir="false" />
     </list>
